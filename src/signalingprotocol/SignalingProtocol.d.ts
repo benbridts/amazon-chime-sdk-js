@@ -322,7 +322,9 @@ export class SdkErrorFrame implements ISdkErrorFrame {
 export enum SdkJoinFlags {
     SEND_BITRATES = 1,
     HAS_STREAM_UPDATE = 2,
-    USE_SEND_SIDE_BWE = 8
+    USE_SEND_SIDE_BWE = 8,
+    COMPLETE_VIDEO_SOURCES_LIST = 16,
+    EXCLUDE_SELF_CONTENT_IN_INDEX = 32
 }
 
 /** Properties of a SdkClientDetails. */
@@ -2634,7 +2636,13 @@ export namespace SdkMetric {
         VIDEO_JITTER_BUFFER_MS = 46,
         VIDEO_DISCARDED_PPS = 47,
         VIDEO_PLIS_SENT = 48,
-        VIDEO_RECEIVED_JITTER_MS = 49
+        VIDEO_RECEIVED_JITTER_MS = 49,
+        VIDEO_ENCODE_HEIGHT = 64,
+        VIDEO_SENT_QP_SUM = 66,
+        VIDEO_DECODE_HEIGHT = 69,
+        VIDEO_RECEIVED_QP_SUM = 72,
+        VIDEO_ENCODE_WIDTH = 86,
+        VIDEO_DECODE_WIDTH = 87
     }
 }
 

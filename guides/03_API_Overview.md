@@ -48,6 +48,46 @@ When obtaining devices to configure, the browser may initially decline to provid
 
 You can override the behavior of the device-label trigger by calling meetingSession.audioVideo.[setDeviceLabelTrigger(trigger)](https://aws.github.io/amazon-chime-sdk-js/interfaces/audiovideofacade.html#setdevicelabeltrigger).
 
+#### Implement a view-only/observer/spectator experience
+
+To enable a view-only experience, you need to control the device permission prompts for audio and video. We suggest that you implement it based on `deviceLabelsTrigger`. By following this, you can achieve it with just little changes.
+
+Note: The view-only mode doesn't impact the ability to view content or listen to audio in your meeting experience.
+
+To suppress device permission prompts, let `deviceLabelTrigger` return an empty `MediaStream` before joining the meeting. Since it's an empty stream, the device permission prompts can't be triggered.
+
+Note: Chrome and Safari don't expose the `deviceId` without granting device permission, but Firefox do. In Firefox, if you try to select the device with `deviceId`, the device permission prompts will be triggered.
+
+To invoke device permission prompts, let `deviceLabelTrigger` return a `MediaStream` that contains your desired device kind. You can trigger it to grant device permission to the browser. After that, list and select the devices to regain the access to devices.
+
+```js
+// Suppress devices
+audioVideo.setDeviceLabelTrigger(() => Promise.resolve(new MediaStream()));
+
+audioVideo.start();
+
+// Invoke devices
+audioVideo.setDeviceLabelTrigger(async () => 
+  await navigator.mediaDevices.getUserMedia({ audio: true, video: true })
+);
+const audioInputDevices = await meetingSession.audioVideo.listAudioInputDevices();
+const audioOutputDevices = await meetingSession.audioVideo.listAudioOutputDevices();
+const videoInputDevices = await meetingSession.audioVideo.listVideoInputDevices();
+await meetingSession.audioVideo.chooseAudioInputDevice(audioInputDevice.deviceId);
+await meetingSession.audioVideo.chooseAudioOutputDevice(audioOutputDevice.deviceId);
+await meetingSession.audioVideo.chooseVideoInputDevice(videoInputDevices.deviceId);
+```
+
+#### Safari user are not able to join the meeting in view-only mode
+
+Safari users may not be able to successfully join the meeting in view-only mode, due to this known issue [#474](https://github.com/aws/amazon-chime-sdk-js/issues/474). Since we are still working on this, you can fix it locally by allowing Safari's Autoplay. The specific steps are:
+
+1. Open your application in the Safari app on your Mac.
+2. Choose Safari > Settings for This Website.
+  You can also Control-click in the Smart Search field, then choose Settings for This Website.
+3. Hold the pointer to the right of Auto-Play, then click the pop-up menu and choose the option:
+    * Allow All Auto-Play: Lets videos on this website play automatically.
+
 ### 2b. Register a device-change observer (optional)
 
 You can receive events about changes to available devices by implementing a [DeviceChangeObserver](https://aws.github.io/amazon-chime-sdk-js/interfaces/devicechangeobserver.html) and registering the observer with the device controller.
@@ -142,13 +182,13 @@ You may optionally listen to the following callbacks to monitor aspects of conne
 
 ## 4. Start and stop the session
 
-Call this API after doing pre-requisite configuration (See previous sections). Otherwise, there will not be working audio and video.
+After completing configuration of audio and video (see previous sections) call `meetingSession.audioVideo.[start()](https://aws.github.io/amazon-chime-sdk-js/interfaces/audiovideofacade.html#start)`. This method will initialize all underlying components, set up connections, and immediately start sending and receiving audio.
 
-To start the meeting session, call meetingSession.audioVideo.[start()](https://aws.github.io/amazon-chime-sdk-js/interfaces/audiovideofacade.html#start). This method will initialize all underlying components, set up connections, and immediately start sending and receiving audio.
-
-To stop the meeting session, call meetingSession.audioVideo.[stop()](https://aws.github.io/amazon-chime-sdk-js/interfaces/audiovideofacade.html#stop).
+To stop the meeting session, call `meetingSession.audioVideo.[stop()](https://aws.github.io/amazon-chime-sdk-js/interfaces/audiovideofacade.html#stop)`.
 
 The `stop()` method does not clean up observers. You can start and stop a session multiple times using the same observers. In other words observers are not tied to the lifecycle of the session.
+
+You can specify a `signalingOnly` option when calling `start` to cause only the initial signaling connection to be established, then complete meeting join with a second call to `start` after choosing audio and video sources. This can improve meeting join latency. You can use this approach if you know that the user wants to join a meeting prior to wanting to share media or having selected input devices — for example, you can initialize the signaling connection early if you have a 'lobby' experience after choosing to join but before entering the interactive portion of the meeting.
 
 ## 5. Build a roster of participants using the real-time API
 
@@ -173,6 +213,11 @@ To unsubscribe to attendee presence changes, call meetingSession.audioVideo.[rea
 To show speaker volume, mute state, and signal strength for each attendee, subscribe to volume indicators for each attendee ID. You should subscribe and unsubscribe to attendee volume indicators as part of the attendee ID presence callback.
 
 Volume is on a scale of 0 to 1 (no volume to max volume). Signal strength is on a scale of 0 to 1 (full packet loss to no packet loss). You can use the signal strength of remote attendees to show an indication of whether an attendee is experiencing packet loss and thus may be unable to communicate at the moment.
+
+Signal strength
+* 0 - 100% loss of audio data
+* < 0.5 - Between 50% to 100% loss of audio data
+* >= 0.5 - Less than 50% loss of audio data
 
 To subscribe to an attendee’s volume indicator, call meetingSession.audioVideo.[realtimeSubscribeToVolumeIndicator(attendeeId, callback)](https://aws.github.io/amazon-chime-sdk-js/interfaces/audiovideofacade.html#realtimesubscribetovolumeindicator).
 

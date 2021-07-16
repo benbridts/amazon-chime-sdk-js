@@ -11,11 +11,19 @@ Parameters:
     Description: The AWS SDK Chime endpoint
     Default: "https://service.chime.aws.amazon.com"
     Type: String
+  ChimeServicePrincipal:
+    Description: "The principal that will capture to the S3 bucket"
+    Default: "chime.amazonaws.com"
+    Type: String
+  ChimeMediaCaptureS3BucketPrefix:
+    Description: Prefix of S3 bucket to write capture artifacts.  The bucket name will be suffixed with the region.
+    Default: ""
+    Type: String
 Conditions:
   ShouldUseEventBridge: !Equals [true, !Ref UseEventBridge]
 Globals:
   Function:
-    Runtime: nodejs10.x
+    Runtime: nodejs14.x
     Timeout: 30
     MemorySize: 128
     Environment:
@@ -25,7 +33,11 @@ Globals:
         BROWSER_LOG_GROUP_NAME: !Ref ChimeBrowserLogs
         BROWSER_MEETING_EVENT_LOG_GROUP_NAME: !Ref ChimeBrowserMeetingEventLogs
         CHIME_ENDPOINT: !Ref ChimeEndpoint
+        BROWSER_EVENT_INGESTION_LOG_GROUP_NAME: !Ref ChimeBrowserEventIngestionLogs
+        CAPTURE_S3_DESTINATION_PREFIX: !Ref ChimeMediaCaptureS3BucketPrefix
+        AWS_ACCOUNT_ID: !Sub "${AWS::AccountId}"
 Resources:
+
   ChimeMeetingsAccessPolicy:
     Type: AWS::IAM::Policy
     Properties:
@@ -46,10 +58,16 @@ Resources:
               - 'chime:DeleteAttendee'
               - 'chime:GetAttendee'
               - 'chime:ListAttendees'
+              - 'chime:CreateMediaCapturePipeline'
+              - 'chime:DeleteMediaCapturePipeline'
+              - 's3:GetBucketPolicy'
+              - 's3:GetBucketLocation'
             Resource: '*'
       Roles:
         - Ref: ChimeSdkJoinLambdaRole
         - Ref: ChimeSdkEndLambdaRole
+        - Ref: ChimeSdkStartCaptureLambdaRole
+        - Ref: ChimeSdkEndCaptureLambdaRole
   ChimeMessagingAccessPolicy:
     Type: AWS::IAM::Policy
     Properties:
@@ -82,6 +100,8 @@ Resources:
         - Ref: ChimeSdkBrowserMeetingEventLogsLambdaRole
         - Ref: ChimeSdkBrowserCreateLogStreamLambdaRole
         - Ref: ChimeSdkBrowserCreateBrowserEventLogStreamLambdaRole
+        - Ref: ChimeSdkBrowserEventIngestionLogsLambdaRole
+        - Ref: ChimeSdkBrowserEventIngestionLogStreamLambdaRole
   Meetings:
     Type: AWS::DynamoDB::Table
     Properties:
@@ -104,15 +124,41 @@ Resources:
       TimeToLiveSpecification:
         AttributeName: "TTL"
         Enabled: true
+  ChimeKMSKey:
+    Type: AWS::KMS::Key
+    Properties:
+      Description: Custom KMS Key with Chime access
+      KeyPolicy:
+        Version: '2012-10-17'
+        Statement:
+        - Sid: Allow access for Chime Service
+          Effect: Allow
+          Principal:
+            Service: !Ref ChimeServicePrincipal
+          Action:
+            - kms:GenerateDataKey
+            - kms:Decrypt
+          Resource: '*'
+        - Sid: Enable IAM User Permissions
+          Effect: Allow
+          Principal:
+            AWS: !Sub arn:aws:iam::${AWS::AccountId}:root
+          Action: kms:*
+          Resource: '*'
+  ChimeKMSAlias:
+    Type: AWS::KMS::Alias
+    Properties:
+      AliasName: !Sub alias/ChimeKMS-${AWS::StackName}
+      TargetKeyId:
+        Ref: ChimeKMSKey
   MeetingNotificationsQueue:
     Type: AWS::SQS::Queue
     Properties:
-      KmsMasterKeyId: 'alias/aws/sqs'
+      KmsMasterKeyId: !Sub alias/ChimeKMS-${AWS::StackName}
   ChimeSdkIndexLambda:
     Type: 'AWS::Serverless::Function'
     Properties:
       Handler: handlers.index
-      Runtime: nodejs10.x
       CodeUri: src/
       Events:
         Api1:
@@ -151,6 +197,37 @@ Resources:
           Properties:
             Path: /end
             Method: POST
+  ChimeSdkStartCaptureLambda:
+    Type: AWS::Serverless::Function
+    Properties:
+      Handler: handlers.start_capture
+      CodeUri: src/
+      Policies:
+        - DynamoDBCrudPolicy:
+            TableName: !Ref Meetings
+      Environment:
+        Variables:
+          USE_EVENT_BRIDGE: !Ref UseEventBridge
+      Events:
+        Api1:
+          Type: Api
+          Properties:
+            Path: /startCapture
+            Method: POST
+  ChimeSdkEndCaptureLambda:
+    Type: AWS::Serverless::Function
+    Properties:
+      Handler: handlers.end_capture
+      CodeUri: src/
+      Policies:
+        - DynamoDBCrudPolicy:
+            TableName: !Ref Meetings
+      Events:
+        Api1:
+          Type: Api
+          Properties:
+            Path: /endCapture
+            Method: POST
   ChimeSQSQueueLambda:
     Type: AWS::Serverless::Function
     Properties:
@@ -162,6 +239,13 @@ Resources:
           Properties:
             Queue: !GetAtt MeetingNotificationsQueue.Arn
             BatchSize: 10
+      Policies:
+        - Statement:
+          - Sid: ChimeSQSQueueLambdaPolicy
+            Effect: Allow
+            Action:
+              - kms:Decrypt
+            Resource: '*'
   ChimeEventBridgeLambda:
     Type: AWS::Serverless::Function
     Condition: ShouldUseEventBridge
@@ -198,6 +282,28 @@ Resources:
           Type: Api
           Properties:
             Path: /log_meeting_event
+            Method: POST
+  ChimeSdkBrowserEventIngestionLogsLambda:
+    Type: AWS::Serverless::Function
+    Properties:
+      Handler: handlers.log_event_ingestion
+      CodeUri: src/
+      Events:
+        Api1:
+          Type: Api
+          Properties:
+            Path: /log_event_ingestion
+            Method: POST
+  ChimeSdkBrowserEventIngestionLogStreamLambda:
+    Type: AWS::Serverless::Function
+    Properties:
+      Handler: handlers.create_browser_event_ingestion_log_stream
+      CodeUri: src/
+      Events:
+        Api1:
+          Type: Api
+          Properties:
+            Path: /create_browser_event_ingestion_log_stream
             Method: POST
   ChimeSdkBrowserCreateLogStreamLambda:
     Type: AWS::Serverless::Function
@@ -244,13 +350,15 @@ Resources:
               - sqs:GetQueueUrl
             Principal:
               Service:
-                - chime.amazonaws.com
+                - !Ref ChimeServicePrincipal
             Resource: !GetAtt MeetingNotificationsQueue.Arn
       Queues:
         - Ref: MeetingNotificationsQueue
   ChimeBrowserLogs:
     Type: AWS::Logs::LogGroup
   ChimeBrowserMeetingEventLogs:
+    Type: AWS::Logs::LogGroup
+  ChimeBrowserEventIngestionLogs:
     Type: AWS::Logs::LogGroup
   ChimeSdkBrowserMeetingEventDashboard:
     Type: AWS::CloudWatch::Dashboard

@@ -14,6 +14,8 @@ export default class DefaultVolumeIndicatorAdapter implements VolumeIndicatorAda
   private streamIdToAttendeeId: { [key: number]: string } = {};
   private streamIdToExternalUserId: { [key: number]: string } = {};
   private warnedAboutMissingStreamIdMapping: { [key: number]: boolean } = {};
+  private attendeeIdToStreamId: { [key: string]: number } = {};
+  private sessionReconnected: boolean = false;
   static MAX_SIGNAL_STRENGTH_LEVELS: number = 2;
   static IMPLICIT_VOLUME: number = 0;
   static IMPLICIT_SIGNAL_STRENGTH: number = 1;
@@ -22,8 +24,13 @@ export default class DefaultVolumeIndicatorAdapter implements VolumeIndicatorAda
     private logger: Logger,
     private realtimeController: RealtimeController,
     private minVolumeDecibels: number,
-    private maxVolumeDecibels: number
+    private maxVolumeDecibels: number,
+    private selfAttendeeId?: string
   ) {}
+
+  onReconnect(): void {
+    this.sessionReconnected = true;
+  }
 
   sendRealtimeUpdatesForAudioStreamIdInfo(info: SdkAudioStreamIdInfoFrame): void {
     let streamIndex = 0;
@@ -33,9 +40,16 @@ export default class DefaultVolumeIndicatorAdapter implements VolumeIndicatorAda
       const hasMuted = stream.hasOwnProperty('muted');
       const hasDropped = !!stream.dropped;
       if (hasAttendeeId) {
+        if (
+          !!this.attendeeIdToStreamId[stream.attendeeId] &&
+          this.attendeeIdToStreamId[stream.attendeeId] < stream.audioStreamId
+        ) {
+          delete this.attendeeIdToStreamId[stream.attendeeId];
+        }
         this.streamIdToAttendeeId[stream.audioStreamId] = stream.attendeeId;
         const externalUserId = hasExternalUserId ? stream.externalUserId : stream.attendeeId;
         this.streamIdToExternalUserId[stream.audioStreamId] = externalUserId;
+        this.attendeeIdToStreamId[stream.attendeeId] = stream.audioStreamId;
         this.realtimeController.realtimeSetAttendeeIdPresence(
           stream.attendeeId,
           true,
@@ -62,6 +76,9 @@ export default class DefaultVolumeIndicatorAdapter implements VolumeIndicatorAda
           delete this.streamIdToAttendeeId[stream.audioStreamId];
           delete this.streamIdToExternalUserId[stream.audioStreamId];
           delete this.warnedAboutMissingStreamIdMapping[stream.audioStreamId];
+          if (this.attendeeIdToStreamId[attendeeId] === stream.audioStreamId) {
+            delete this.attendeeIdToStreamId[attendeeId];
+          }
           let attendeeHasNewStreamId = false;
           for (const otherStreamId of Object.keys(this.streamIdToAttendeeId)) {
             const otherStreamIdNumber = parseInt(otherStreamId);
@@ -83,6 +100,43 @@ export default class DefaultVolumeIndicatorAdapter implements VolumeIndicatorAda
             );
           }
         }
+      }
+    }
+    if (this.sessionReconnected) {
+      this.cleanUpState(info);
+      this.sessionReconnected = false;
+    }
+  }
+
+  private cleanUpState(info: SdkAudioStreamIdInfoFrame): void {
+    const localAttendeeIds = Object.values(this.streamIdToAttendeeId);
+    const remoteAttendeeIds = info.streams.map(stream => stream.attendeeId);
+    const deletedAttendeeIds = localAttendeeIds.filter(id => {
+      return !remoteAttendeeIds.includes(id);
+    });
+
+    for (const [index, deletedAttendeeId] of deletedAttendeeIds.entries()) {
+      const streamId = this.attendeeIdToStreamId[deletedAttendeeId];
+      const externalUserId = this.streamIdToExternalUserId[streamId];
+      delete this.streamIdToAttendeeId[streamId];
+      delete this.streamIdToExternalUserId[streamId];
+      delete this.warnedAboutMissingStreamIdMapping[streamId];
+      delete this.attendeeIdToStreamId[deletedAttendeeId];
+
+      // The reconnect event does not have information whether the attendee is dropped/left.
+      // Defaulting to attendee leaving the meeting
+      this.realtimeController.realtimeSetAttendeeIdPresence(
+        deletedAttendeeId,
+        false,
+        externalUserId,
+        false,
+        { attendeeIndex: index, attendeesInFrame: deletedAttendeeId.length }
+      );
+
+      if (deletedAttendeeId === this.selfAttendeeId) {
+        this.logger.warn(
+          `the volume indicator adapter cleans up the current attendee (presence = false) after reconnection`
+        );
       }
     }
   }

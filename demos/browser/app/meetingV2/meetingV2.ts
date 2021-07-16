@@ -17,43 +17,88 @@ import {
   DataMessage,
   DefaultActiveSpeakerPolicy,
   DefaultAudioMixController,
+  DefaultAudioVideoController,
+  DefaultBrowserBehavior,
   DefaultDeviceController,
   DefaultMeetingSession,
   DefaultModality,
-  DefaultBrowserBehavior,
+  DefaultVideoTransformDevice,
   Device,
   DeviceChangeObserver,
-  EventName,
   EventAttributes,
+  EventName,
   LogLevel,
   Logger,
-  MultiLogger,
   MeetingSession,
   MeetingSessionConfiguration,
   MeetingSessionPOSTLogger,
   MeetingSessionStatus,
   MeetingSessionStatusCode,
   MeetingSessionVideoAvailability,
+  MultiLogger,
+  NoOpVideoFrameProcessor,
   RemovableAnalyserNode,
   SimulcastLayers,
+  TargetDisplaySize,
   TimeoutScheduler,
   Versioning,
+  VideoDownlinkObserver,
+  VideoFrameProcessor,
   VideoInputDevice,
+  VideoPreference,
+  VideoPreferences,
+  VideoPriorityBasedPolicy,
   VideoSource,
   VideoTileState,
   VoiceFocusDeviceTransformer,
   VoiceFocusPaths,
   VoiceFocusTransformDevice,
   isAudioTransformDevice,
-} from '../../../../src/index';
-import WebRTCStatsCollector from './webrtcstatscollector/WebRTCStatsCollector';
+  VideoPriorityBasedPolicyConfig,
+  NoOpEventReporter,
+  EventReporter,
+  isDestroyable,
+  MeetingEventsClientConfiguration,
+  EventIngestionConfiguration,
+  DefaultMeetingEventReporter
+} from 'amazon-chime-sdk-js';
+
+import CircularCut from './videofilter/CircularCut';
+import EmojifyVideoFrameProcessor from './videofilter/EmojifyVideoFrameProcessor';
+import SegmentationProcessor from './videofilter/SegmentationProcessor';
+import {
+  loadBodyPixDependency,
+  platformCanSupportBodyPixWithoutDegradation,
+} from './videofilter/SegmentationUtil';
+
+let SHOULD_EARLY_CONNECT = (() => {
+  return document.location.search.includes('earlyConnect=1');
+})();
+
+let SHOULD_DIE_ON_FATALS = (() => {
+  const isLocal = document.location.host === '127.0.0.1:8080' || document.location.host === 'localhost:8080';
+  const fatalYes = document.location.search.includes('fatal=1');
+  const fatalNo = document.location.search.includes('fatal=0');
+  return fatalYes || (isLocal && !fatalNo);
+})();
+
+let DEBUG_LOG_PPS = false;
+
+let fatal: (e: Error) => void;
+
+// This shim is needed to avoid warnings when supporting Safari.
+declare global {
+  interface Window {
+    webkitAudioContext: typeof AudioContext
+  }
+}
 
 class DemoTileOrganizer {
   // this is index instead of length
   static MAX_TILES = 17;
-  public tiles: { [id: number]: number } = {};
-  public tileStates: {[id: number]: boolean } = {};
-  public remoteTileCount = 0;
+  tiles: { [id: number]: number } = {};
+  tileStates: { [id: number]: boolean } = {};
+  remoteTileCount = 0;
 
   acquireTileIndex(tileId: number): number {
     for (let index = 0; index <= DemoTileOrganizer.MAX_TILES; index++) {
@@ -104,7 +149,13 @@ const VOICE_FOCUS_SPEC = {
   paths: VOICE_FOCUS_PATHS,
 };
 
+type VideoFilterName = 'Emojify' | 'CircularCut' | 'NoOp' | 'Segmentation' | 'None';
+
+const VIDEO_FILTERS: VideoFilterName[] = ['Emojify', 'CircularCut', 'NoOp'];
+
 class TestSound {
+  static testAudioElement = new Audio();
+
   constructor(
     private logger: Logger,
     private sinkId: string | null,
@@ -114,9 +165,7 @@ class TestSound {
     private maxGainValue: number = 0.1
   ) {}
 
-
   async init(): Promise<void> {
-    // @ts-ignore
     const audioContext: AudioContext = new (window.AudioContext || window.webkitAudioContext)();
     const gainNode = audioContext.createGain();
     gainNode.gain.value = 0;
@@ -129,19 +178,26 @@ class TestSound {
     const startTime = currentTime + 0.1;
     gainNode.gain.linearRampToValueAtTime(0, startTime);
     gainNode.gain.linearRampToValueAtTime(this.maxGainValue, startTime + this.rampSec);
-    gainNode.gain.linearRampToValueAtTime(this.maxGainValue, startTime + this.rampSec + this.durationSec);
+    gainNode.gain.linearRampToValueAtTime(
+      this.maxGainValue,
+      startTime + this.rampSec + this.durationSec
+    );
     gainNode.gain.linearRampToValueAtTime(0, startTime + this.rampSec * 2 + this.durationSec);
     oscillatorNode.start();
     const audioMixController = new DefaultAudioMixController(this.logger);
-    try {
-      // @ts-ignore
-      await audioMixController.bindAudioDevice({ deviceId: this.sinkId });
-    } catch (e) {
-      this.logger?.error(`Failed to bind audio device: ${e}`);
+    if (new DefaultBrowserBehavior().supportsSetSinkId()) {
+      try {
+        // @ts-ignore
+        await audioMixController.bindAudioDevice({ deviceId: this.sinkId });
+      } catch (e) {
+        fatal(e);
+        this.logger?.error(`Failed to bind audio device: ${e}`);
+      }
     }
     try {
-      await audioMixController.bindAudioElement(new Audio());
+      await audioMixController.bindAudioElement(TestSound.testAudioElement);
     } catch (e) {
+      fatal(e);
       this.logger?.error(`Failed to bind audio element: ${e}`);
     }
     await audioMixController.bindAudioStream(destinationStream.stream);
@@ -154,7 +210,7 @@ class TestSound {
 export enum ContentShareType {
   ScreenCapture,
   VideoFile,
-};
+}
 
 const SimulcastLayerMapping = {
   [SimulcastLayers.Low]: 'Low',
@@ -162,27 +218,38 @@ const SimulcastLayerMapping = {
   [SimulcastLayers.LowAndHigh]: 'Low and High',
   [SimulcastLayers.Medium]: 'Medium',
   [SimulcastLayers.MediumAndHigh]: 'Medium and High',
-  [SimulcastLayers.High]: 'High'
+  [SimulcastLayers.High]: 'High',
 };
 
 interface Toggle {
-  name: string,
-  oncreate: (elem: HTMLElement) => void,
-  action: () => void,
+  name: string;
+  oncreate: (elem: HTMLElement) => void;
+  action: () => void;
 }
 
-export class DemoMeetingApp implements
-  AudioVideoObserver,
-  DeviceChangeObserver,
-  ContentShareObserver {
+export class DemoMeetingApp
+  implements AudioVideoObserver, DeviceChangeObserver, ContentShareObserver, VideoDownlinkObserver {
   static readonly DID: string = '+17035550122';
-  static readonly BASE_URL: string = [location.protocol, '//', location.host, location.pathname.replace(/\/*$/, '/').replace('/v2', '')].join('');
-  static testVideo: string = 'https://upload.wikimedia.org/wikipedia/commons/transcoded/c/c0/Big_Buck_Bunny_4K.webm/Big_Buck_Bunny_4K.webm.360p.vp9.webm';
+  static readonly BASE_URL: string = [
+    location.protocol,
+    '//',
+    location.host,
+    location.pathname.replace(/\/*$/, '/').replace('/v2', ''),
+  ].join('');
+  static testVideo: string =
+    'https://upload.wikimedia.org/wikipedia/commons/transcoded/c/c0/Big_Buck_Bunny_4K.webm/Big_Buck_Bunny_4K.webm.360p.vp9.webm';
   static readonly LOGGER_BATCH_SIZE: number = 85;
-  static readonly LOGGER_INTERVAL_MS: number = 2000;
+  static readonly LOGGER_INTERVAL_MS: number = 2_000;
   static readonly MAX_MEETING_HISTORY_MS: number = 5 * 60 * 1000;
-  static readonly DATA_MESSAGE_TOPIC: string = "chat";
-  static readonly DATA_MESSAGE_LIFETIME_MS: number = 300000;
+  static readonly DATA_MESSAGE_TOPIC: string = 'chat';
+  static readonly DATA_MESSAGE_LIFETIME_MS: number = 300_000;
+
+  // Ideally we don't need to change this. Keep this configurable in case users have a super slow network.
+  loadingBodyPixDependencyTimeoutMs: number = 10_000;
+  loadingBodyPixDependencyPromise: undefined | Promise<void>;
+
+  attendeeIdPresenceHandler: (undefined | ((attendeeId: string, present: boolean, externalUserId: string, dropped: boolean) => void)) = undefined;
+  activeSpeakerHandler: (undefined | ((attendeeIds: string[]) => void)) = undefined;
 
   showActiveSpeakerScores = false;
   activeSpeakerLayout = true;
@@ -192,6 +259,7 @@ export class DemoMeetingApp implements
   sipURI: string | null = null;
   region: string | null = null;
   meetingSession: MeetingSession | null = null;
+  priorityBasedDownlinkPolicy: VideoPriorityBasedPolicy | null = null;
   audioVideo: AudioVideoFacade | null = null;
   tileOrganizer: DemoTileOrganizer = new DemoTileOrganizer();
   canStartLocalVideo: boolean = true;
@@ -201,6 +269,8 @@ export class DemoMeetingApp implements
   roster: any = {};
   tileIndexToTileId: { [id: number]: number } = {};
   tileIdToTileIndex: { [id: number]: number } = {};
+  tileIndexToPauseEventListener: { [id: number]: (event: Event) => void } = {};
+  tileIndexToPinEventListener: { [id: number]: (event: Event) => void } = {};
   tileArea = document.getElementById('tile-area') as HTMLDivElement;
 
   cameraDeviceIds: string[] = [];
@@ -214,6 +284,9 @@ export class DemoMeetingApp implements
     'button-content-share': false,
     'button-pause-content-share': false,
     'button-video-stats': false,
+    'button-video-filter': false,
+    'button-record-self': false,
+    'button-record-cloud': false,
   };
 
   contentShareType: ContentShareType = ContentShareType.ScreenCapture;
@@ -222,19 +295,21 @@ export class DemoMeetingApp implements
   enableWebAudio = false;
   enableUnifiedPlanForChromiumBasedBrowsers = true;
   enableSimulcast = false;
+  usePriorityBasedDownlinkPolicy = false;
+  videoPriorityBasedPolicyConfig = VideoPriorityBasedPolicyConfig.Default;
 
   supportsVoiceFocus = false;
   enableVoiceFocus = false;
   voiceFocusIsActive = false;
 
-  markdown = require('markdown-it')({linkify: true});
+  markdown = require('markdown-it')({ linkify: true });
   lastMessageSender: string | null = null;
   lastReceivedMessageTimestamp = 0;
+  meetingSessionPOSTLogger: MeetingSessionPOSTLogger;
   meetingEventPOSTLogger: MeetingSessionPOSTLogger;
 
   hasChromiumWebRTC: boolean = this.defaultBrowserBehaviour.hasChromiumWebRTC();
 
-  statsCollector: WebRTCStatsCollector = new WebRTCStatsCollector();
   voiceFocusTransformer: VoiceFocusDeviceTransformer | undefined;
   voiceFocusDevice: VoiceFocusTransformDevice | undefined;
 
@@ -243,20 +318,93 @@ export class DemoMeetingApp implements
   voiceFocusDisplayables: HTMLElement[] = [];
   analyserNode: RemovableAnalyserNode;
 
+  chosenVideoTransformDevice: DefaultVideoTransformDevice;
+  chosenVideoFilter: VideoFilterName = 'None';
+  selectedVideoFilterItem: VideoFilterName = 'None';
+
+  meetingLogger: Logger | undefined = undefined;
+
+  // If you want to make this a repeatable SPA, change this to 'spa'
+  // and fix some state (e.g., video buttons).
+  // Holding Shift while hitting the Leave button is handled by setting
+  // this to `halt`, which allows us to stop and measure memory leaks.
+  behaviorAfterLeave: 'spa' | 'reload' | 'halt' = 'reload';
+
+  videoUpstreamMetricsKeyStats: { [key: string]: string } = {
+    videoUpstreamGoogFrameHeight: 'Frame Height',
+    videoUpstreamGoogFrameWidth: 'Frame Width',
+    videoUpstreamFrameHeight: 'Frame Height',
+    videoUpstreamFrameWidth: 'Frame Width',
+    videoUpstreamBitrate: 'Bitrate (bps)',
+    videoUpstreamPacketsSent: 'Packets Sent',
+    videoUpstreamPacketLossPercent: 'Packet Loss (%)',
+    videoUpstreamFramesEncodedPerSecond: 'Frame Rate',
+  };
+
+  videoDownstreamMetricsKeyStats: { [key: string]: string } = {
+    videoDownstreamGoogFrameHeight: 'Frame Height',
+    videoDownstreamGoogFrameWidth: 'Frame Width',
+    videoDownstreamFrameHeight: 'Frame Height',
+    videoDownstreamFrameWidth: 'Frame Width',
+    videoDownstreamBitrate: 'Bitrate (bps)',
+    videoDownstreamPacketLossPercent: 'Packet Loss (%)',
+    videoDownstreamPacketsReceived: 'Packet Received',
+    videoDownstreamFramesDecodedPerSecond: 'Frame Rate',
+  };
+
+  videoMetricReport: { [id: string]: { [id: string]: {} } } = {};
+
+  removeFatalHandlers: () => void;
+
+  addFatalHandlers(): void {
+    fatal = this.fatal.bind(this);
+
+    const onEvent = (event: ErrorEvent): void => {
+      // In Safari there's only a message.
+      fatal(event.error || event.message);
+    };
+
+    // Listen for unhandled errors, too.
+    window.addEventListener('error', onEvent);
+
+    window.onunhandledrejection = (event: PromiseRejectionEvent) => {
+      fatal(event.reason);
+    };
+
+    this.removeFatalHandlers = () => {
+      window.onunhandledrejection = undefined;
+      window.removeEventListener('error', onEvent);
+      fatal = undefined;
+      this.removeFatalHandlers = undefined;
+    }
+  }
+
+  eventReporter: EventReporter | undefined = undefined;
+  enableEventReporting = false;
+
   constructor() {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     (global as any).app = this;
+
+    this.addFatalHandlers();
+
+    if (document.location.search.includes('testfatal=1')) {
+      this.fatal(new Error('Testing fatal.'));
+      return;
+    }
+
     (document.getElementById('sdk-version') as HTMLSpanElement).innerText =
-      "amazon-chime-sdk-js@" + Versioning.sdkVersion;
+      'amazon-chime-sdk-js@' + Versioning.sdkVersion;
     this.initEventListeners();
     this.initParameters();
     this.setMediaRegion();
     this.setUpVideoTileElementResizer();
     if (this.isRecorder() || this.isBroadcaster()) {
-      new AsyncScheduler().start(async () => {
+      AsyncScheduler.nextTick(async () => {
         this.meeting = new URL(window.location.href).searchParams.get('m');
         this.name = this.isRecorder() ? '«Meeting Recorder»' : '«Meeting Broadcaster»';
         await this.authenticate();
+        await this.openAudioOutputFromSelection();
         await this.join();
         this.displayButtonStates();
         this.switchToFlow('flow-meeting');
@@ -264,6 +412,29 @@ export class DemoMeetingApp implements
     } else {
       this.switchToFlow('flow-authenticate');
     }
+  }
+
+  /**
+   * We want to make it abundantly clear at development and testing time
+   * when an unexpected error occurs.
+   * If we're running locally, or we passed a `fatal=1` query parameter, fail hard.
+   */
+  fatal(e: Error | string): void {
+    // Muffle mode: let the `try-catch` do its job.
+    if (!SHOULD_DIE_ON_FATALS) {
+      console.info('Ignoring fatal', e);
+      return;
+    }
+
+    console.error('Fatal error: this was going to be caught, but should not have been thrown.', e);
+
+    if (e && e instanceof Error) {
+      document.getElementById('stack').innerText = e.message + '\n' + e.stack?.toString();
+    } else {
+      document.getElementById('stack').innerText = '' + e;
+    }
+
+    this.switchToFlow('flow-fatal');
   }
 
   initParameters(): void {
@@ -284,14 +455,16 @@ export class DemoMeetingApp implements
     }
 
     try {
-      this.supportsVoiceFocus = await VoiceFocusDeviceTransformer.isSupported(VOICE_FOCUS_SPEC, { logger });
+      this.supportsVoiceFocus = await VoiceFocusDeviceTransformer.isSupported(VOICE_FOCUS_SPEC, {
+        logger,
+      });
       if (this.supportsVoiceFocus) {
         this.voiceFocusTransformer = await this.getVoiceFocusDeviceTransformer();
-        this.supportsVoiceFocus = this.voiceFocusTransformer && this.voiceFocusTransformer.isSupported();
+        this.supportsVoiceFocus =
+          this.voiceFocusTransformer && this.voiceFocusTransformer.isSupported();
         if (this.supportsVoiceFocus) {
           logger.info('[DEMO] Amazon Voice Focus is supported.');
           document.getElementById('voice-focus-setting').classList.remove('hidden');
-          await this.populateAllDeviceLists();
           return;
         }
       }
@@ -302,7 +475,6 @@ export class DemoMeetingApp implements
     logger.warn('[DEMO] Does not support Amazon Voice Focus.');
     this.supportsVoiceFocus = false;
     document.getElementById('voice-focus-setting').classList.toggle('hidden', true);
-    await this.populateAllDeviceLists();
   }
 
   private async onVoiceFocusSettingChanged(): Promise<void> {
@@ -316,20 +488,56 @@ export class DemoMeetingApp implements
       (document.getElementById('planB') as HTMLInputElement).disabled = true;
     }
 
+    document.getElementById('priority-downlink-policy').addEventListener('change', e => {
+      this.usePriorityBasedDownlinkPolicy = (document.getElementById('priority-downlink-policy') as HTMLInputElement).checked;
+
+      const priorityBasedDownlinkPolicyConfig = document.getElementById(
+        'priority-downlink-policy-preset'
+      ) as HTMLSelectElement;
+
+      if (this.usePriorityBasedDownlinkPolicy) {
+        priorityBasedDownlinkPolicyConfig.style.display = 'block';
+      } else {
+        priorityBasedDownlinkPolicyConfig.style.display = 'none';
+      }
+    });
+
+    const presetDropDown = document.getElementById('priority-downlink-policy-preset') as HTMLSelectElement;
+    presetDropDown.addEventListener('change', async e => {
+      switch (presetDropDown.value) {
+        case 'stable':
+          this.videoPriorityBasedPolicyConfig = VideoPriorityBasedPolicyConfig.StableNetworkPreset;
+          break;
+        case 'unstable':
+          this.videoPriorityBasedPolicyConfig = VideoPriorityBasedPolicyConfig.UnstableNetworkPreset;
+          break;
+        case 'default':
+          this.videoPriorityBasedPolicyConfig = VideoPriorityBasedPolicyConfig.Default;
+          break;
+      }
+      this.log('priority-downlink-policy-preset is changed: ' + presetDropDown.value);
+    });
+
     document.getElementById('form-authenticate').addEventListener('submit', e => {
       e.preventDefault();
       this.meeting = (document.getElementById('inputMeeting') as HTMLInputElement).value;
       this.name = (document.getElementById('inputName') as HTMLInputElement).value;
       this.region = (document.getElementById('inputRegion') as HTMLInputElement).value;
       this.enableSimulcast = (document.getElementById('simulcast') as HTMLInputElement).checked;
+      this.enableEventReporting = (document.getElementById('event-reporting') as HTMLInputElement).checked;
       if (this.enableSimulcast) {
-        const videoInputQuality = document.getElementById('video-input-quality') as HTMLSelectElement;
+        const videoInputQuality = document.getElementById(
+          'video-input-quality'
+        ) as HTMLSelectElement;
         videoInputQuality.value = '720p';
       }
       this.enableWebAudio = (document.getElementById('webaudio') as HTMLInputElement).checked;
       // js sdk default to enable unified plan, equivalent to "Disable Unified Plan" default unchecked
-      this.enableUnifiedPlanForChromiumBasedBrowsers = !(document.getElementById('planB') as HTMLInputElement).checked;
-      new AsyncScheduler().start(
+      this.enableUnifiedPlanForChromiumBasedBrowsers = !(document.getElementById(
+        'planB'
+      ) as HTMLInputElement).checked;
+
+      AsyncScheduler.nextTick(
         async (): Promise<void> => {
           let chimeMeetingId: string = '';
           this.showProgress('progress-authenticate');
@@ -337,7 +545,8 @@ export class DemoMeetingApp implements
             chimeMeetingId = await this.authenticate();
           } catch (error) {
             console.error(error);
-            const httpErrorMessage = 'UserMedia is not allowed in HTTP sites. Either use HTTPS or enable media capture on insecure sites.';
+            const httpErrorMessage =
+              'UserMedia is not allowed in HTTP sites. Either use HTTPS or enable media capture on insecure sites.';
             (document.getElementById(
               'failed-meeting'
             ) as HTMLDivElement).innerText = `Meeting ID: ${this.meeting}`;
@@ -365,6 +574,8 @@ export class DemoMeetingApp implements
           (document.getElementById('info-name') as HTMLSpanElement).innerText = this.name;
 
           await this.initVoiceFocus();
+          await this.populateAllDeviceLists();
+          await this.populateVideoFilterInputList();
 
           this.switchToFlow('flow-devices');
           await this.openAudioInputFromSelectionAndPreview();
@@ -374,22 +585,44 @@ export class DemoMeetingApp implements
               true
             );
           } catch (err) {
-            this.log('no video input device selected');
+            fatal(err);
           }
           await this.openAudioOutputFromSelection();
           this.hideProgress('progress-authenticate');
+
+          // Open the signaling connection while the user is checking their input devices.
+          const preconnect = document.getElementById('preconnect') as HTMLInputElement;
+          if (preconnect.checked) {
+            this.audioVideo.start({ signalingOnly: true });
+          }
         }
       );
     });
 
-    const speechMonoCheckbox = document.getElementById('fullband-speech-mono-quality') as HTMLInputElement;
-    const musicMonoCheckbox = document.getElementById('fullband-music-mono-quality') as HTMLInputElement;
-    speechMonoCheckbox.addEventListener('change', e => {
+    const earlyConnectCheckbox = document.getElementById('preconnect') as HTMLInputElement;
+    earlyConnectCheckbox.checked = SHOULD_EARLY_CONNECT;
+    earlyConnectCheckbox.onchange = () => {
+      SHOULD_EARLY_CONNECT = !!earlyConnectCheckbox.checked;
+    }
+
+    const dieCheckbox = document.getElementById('die') as HTMLInputElement;
+    dieCheckbox.checked = SHOULD_DIE_ON_FATALS;
+    dieCheckbox.onchange = () => {
+      SHOULD_DIE_ON_FATALS = !!dieCheckbox.checked;
+    }
+
+    const speechMonoCheckbox = document.getElementById(
+      'fullband-speech-mono-quality'
+    ) as HTMLInputElement;
+    const musicMonoCheckbox = document.getElementById(
+      'fullband-music-mono-quality'
+    ) as HTMLInputElement;
+    speechMonoCheckbox.addEventListener('change', _e => {
       if (speechMonoCheckbox.checked) {
         musicMonoCheckbox.checked = false;
       }
     });
-    musicMonoCheckbox.addEventListener('change', e => {
+    musicMonoCheckbox.addEventListener('change', _e => {
       if (musicMonoCheckbox.checked) {
         speechMonoCheckbox.checked = false;
       }
@@ -407,13 +640,17 @@ export class DemoMeetingApp implements
         'voiceConnectorId'
       ) as HTMLInputElement).value;
 
-      new AsyncScheduler().start(
+      AsyncScheduler.nextTick(
         async (): Promise<void> => {
           this.showProgress('progress-authenticate');
           const region = this.region || 'us-east-1';
           try {
             const response = await fetch(
-              `${DemoMeetingApp.BASE_URL}join?title=${encodeURIComponent(this.meeting)}&name=${encodeURIComponent(DemoMeetingApp.DID)}&region=${encodeURIComponent(region)}`,
+              `${DemoMeetingApp.BASE_URL}join?title=${encodeURIComponent(
+                this.meeting
+              )}&name=${encodeURIComponent(DemoMeetingApp.DID)}&region=${encodeURIComponent(
+                region
+              )}`,
               {
                 method: 'POST',
               }
@@ -456,7 +693,7 @@ export class DemoMeetingApp implements
       try {
         await this.openVideoInputFromSelection(videoInput.value, true);
       } catch (err) {
-        this.log('no video input device selected');
+        fatal(err);
       }
     });
 
@@ -477,7 +714,7 @@ export class DemoMeetingApp implements
       try {
         await this.openVideoInputFromSelection(videoInput.value, true);
       } catch (err) {
-        this.log('no video input device selected');
+        fatal(err);
       }
     });
 
@@ -496,18 +733,23 @@ export class DemoMeetingApp implements
 
     document.getElementById('form-devices').addEventListener('submit', e => {
       e.preventDefault();
-      new AsyncScheduler().start(async () => {
+      AsyncScheduler.nextTick(async () => {
         try {
           this.showProgress('progress-join');
           await this.stopAudioPreview();
-          this.audioVideo.stopVideoPreviewForVideoInput(document.getElementById(
-            'video-preview'
-          ) as HTMLVideoElement);
+          this.audioVideo.stopVideoPreviewForVideoInput(
+            document.getElementById('video-preview') as HTMLVideoElement
+          );
           await this.join();
           this.audioVideo.chooseVideoInputDevice(null);
           this.hideProgress('progress-join');
           this.displayButtonStates();
           this.switchToFlow('flow-meeting');
+
+          if (DEBUG_LOG_PPS) {
+            this.logPPS();
+            DEBUG_LOG_PPS = false;   // Only do this once.
+          }
         } catch (error) {
           document.getElementById('failed-join').innerText = `Meeting ID: ${this.meeting}`;
           document.getElementById('failed-join-error').innerText = `Error: ${error.message}`;
@@ -515,10 +757,13 @@ export class DemoMeetingApp implements
       });
     });
 
-    (document.getElementById('add-voice-focus') as HTMLInputElement).addEventListener('change', e => {
-      this.enableVoiceFocus = (e.target as HTMLInputElement).checked;
-      this.onVoiceFocusSettingChanged();
-    });
+    (document.getElementById('add-voice-focus') as HTMLInputElement).addEventListener(
+      'change',
+      e => {
+        this.enableVoiceFocus = (e.target as HTMLInputElement).checked;
+        this.onVoiceFocusSettingChanged();
+      }
+    );
 
     const buttonMute = document.getElementById('button-microphone');
     buttonMute.addEventListener('mousedown', _e => {
@@ -529,9 +774,81 @@ export class DemoMeetingApp implements
       }
     });
 
+    const buttonCloudCapture = document.getElementById('button-record-cloud') as HTMLButtonElement;
+    buttonCloudCapture.addEventListener('click', _e => {
+      if (this.toggleButton('button-record-cloud')) {
+        AsyncScheduler.nextTick(async () => {
+          buttonCloudCapture.disabled = true;
+          await this.startMediaCapture();
+          buttonCloudCapture.disabled = false;
+        });
+      } else {
+        AsyncScheduler.nextTick(async () => {
+          buttonCloudCapture.disabled = true;
+          await this.stopMediaCapture();
+          buttonCloudCapture.disabled = false;
+        });
+      }
+    });
+
+    const buttonRecordSelf = document.getElementById('button-record-self');
+    let recorder: MediaRecorder;
+    buttonRecordSelf.addEventListener('click', _e => {
+      const chunks: Blob[] = [];
+      AsyncScheduler.nextTick(async () => {
+        if (!this.toggleButton('button-record-self')) {
+          console.info('Stopping recorder ', recorder);
+          recorder.stop();
+          recorder = undefined;
+          return;
+        }
+
+        // Combine the audio and video streams.
+        const mixed = new MediaStream();
+
+        const localTile = this.audioVideo.getLocalVideoTile();
+        if (localTile) {
+          mixed.addTrack(localTile.state().boundVideoStream.getVideoTracks()[0]);
+        }
+
+        // We need to get access to the media stream broker, which requires knowing
+        // the exact implementation. Sorry!
+        /* @ts-ignore */
+        const av: DefaultAudioVideoController = this.audioVideo.audioVideoController;
+        const input = await av.mediaStreamBroker.acquireAudioInputStream();
+        mixed.addTrack(input.getAudioTracks()[0]);
+
+        recorder = new MediaRecorder(mixed, { mimeType: 'video/webm; codecs=vp9' });
+        console.info('Setting recorder to', recorder);
+        recorder.ondataavailable = (event) => {
+          if (event.data.size) {
+            chunks.push(event.data);
+          }
+        };
+
+        recorder.onstop = () => {
+          const blob = new Blob(chunks, {
+            type: 'video/webm',
+          });
+          chunks.length = 0;
+          const url = URL.createObjectURL(blob);
+          const a = document.createElement('a');
+          document.body.appendChild(a);
+          /* @ts-ignore */
+          a.style = 'display: none';
+          a.href = url;
+          a.download = 'recording.webm';
+          a.click();
+          window.URL.revokeObjectURL(url);
+        };
+
+        recorder.start();
+      });
+    });
+
     const buttonVideo = document.getElementById('button-camera');
     buttonVideo.addEventListener('click', _e => {
-      new AsyncScheduler().start(async () => {
+      AsyncScheduler.nextTick(async () => {
         if (this.toggleButton('button-camera') && this.canStartLocalVideo) {
           try {
             let camera: string = videoInput.value;
@@ -541,7 +858,7 @@ export class DemoMeetingApp implements
             await this.openVideoInputFromSelection(camera, false);
             this.audioVideo.startLocalVideoTile();
           } catch (err) {
-            this.log('no video input device selected');
+            fatal(err);
           }
         } else {
           this.audioVideo.stopLocalVideoTile();
@@ -555,18 +872,26 @@ export class DemoMeetingApp implements
       if (!this.isButtonOn('button-content-share')) {
         return;
       }
-      new AsyncScheduler().start(async () => {
+      AsyncScheduler.nextTick(async () => {
         if (this.toggleButton('button-pause-content-share')) {
           this.audioVideo.pauseContentShare();
+          if (this.contentShareType === ContentShareType.VideoFile) {
+            const videoFile = document.getElementById('content-share-video') as HTMLVideoElement;
+            videoFile.pause();
+          }
         } else {
           this.audioVideo.unpauseContentShare();
+          if (this.contentShareType === ContentShareType.VideoFile) {
+            const videoFile = document.getElementById('content-share-video') as HTMLVideoElement;
+            await videoFile.play();
+          }
         }
       });
     });
 
     const buttonContentShare = document.getElementById('button-content-share');
     buttonContentShare.addEventListener('click', _e => {
-      new AsyncScheduler().start(() => {
+      AsyncScheduler.nextTick(() => {
         if (!this.isButtonOn('button-content-share')) {
           this.contentShareStart();
         } else {
@@ -577,13 +902,14 @@ export class DemoMeetingApp implements
 
     const buttonSpeaker = document.getElementById('button-speaker');
     buttonSpeaker.addEventListener('click', _e => {
-      new AsyncScheduler().start(async () => {
+      AsyncScheduler.nextTick(async () => {
         if (this.toggleButton('button-speaker')) {
           try {
-            await this.audioVideo.bindAudioElement(document.getElementById(
-              'meeting-audio'
-            ) as HTMLAudioElement);
+            await this.audioVideo.bindAudioElement(
+              document.getElementById('meeting-audio') as HTMLAudioElement
+            );
           } catch (e) {
+            fatal(e);
             this.log('Failed to bindAudioElement', e);
           }
         } else {
@@ -596,27 +922,35 @@ export class DemoMeetingApp implements
     buttonVideoStats.addEventListener('click', () => {
       if (this.isButtonOn('button-video-stats')) {
         document.querySelectorAll('.stats-info').forEach(e => e.remove());
+      } else {
+        this.getRelayProtocol();
       }
       this.toggleButton('button-video-stats');
     });
 
-    const sendMessage = () => {
-      new AsyncScheduler().start(() => {
+    const sendMessage = (): void => {
+      AsyncScheduler.nextTick(() => {
         const textArea = document.getElementById('send-message') as HTMLTextAreaElement;
         const textToSend = textArea.value.trim();
         if (!textToSend) {
           return;
         }
         textArea.value = '';
-        this.audioVideo.realtimeSendDataMessage(DemoMeetingApp.DATA_MESSAGE_TOPIC, textToSend, DemoMeetingApp.DATA_MESSAGE_LIFETIME_MS);
-        // echo the message to the handler
-        this.dataMessageHandler(new DataMessage(
-          Date.now(),
+        this.audioVideo.realtimeSendDataMessage(
           DemoMeetingApp.DATA_MESSAGE_TOPIC,
-          new TextEncoder().encode(textToSend),
-          this.meetingSession.configuration.credentials.attendeeId,
-          this.meetingSession.configuration.credentials.externalUserId
-        ));
+          textToSend,
+          DemoMeetingApp.DATA_MESSAGE_LIFETIME_MS
+        );
+        // echo the message to the handler
+        this.dataMessageHandler(
+          new DataMessage(
+            Date.now(),
+            DemoMeetingApp.DATA_MESSAGE_TOPIC,
+            new TextEncoder().encode(textToSend),
+            this.meetingSession.configuration.credentials.attendeeId,
+            this.meetingSession.configuration.credentials.externalUserId
+          )
+        );
       });
     };
 
@@ -635,73 +969,114 @@ export class DemoMeetingApp implements
 
     const buttonMeetingEnd = document.getElementById('button-meeting-end');
     buttonMeetingEnd.addEventListener('click', _e => {
-      const confirmEnd = (new URL(window.location.href).searchParams.get('confirm-end')) === 'true';
-      const prompt = 'Are you sure you want to end the meeting for everyone? The meeting cannot be used after ending it.';
+      const confirmEnd = new URL(window.location.href).searchParams.get('confirm-end') === 'true';
+      const prompt =
+        'Are you sure you want to end the meeting for everyone? The meeting cannot be used after ending it.';
       if (confirmEnd && !window.confirm(prompt)) {
         return;
       }
-      new AsyncScheduler().start(async () => {
+      AsyncScheduler.nextTick(async () => {
         (buttonMeetingEnd as HTMLButtonElement).disabled = true;
         await this.endMeeting();
-        this.leave();
+        await this.leave();
         (buttonMeetingEnd as HTMLButtonElement).disabled = false;
       });
     });
 
     const buttonMeetingLeave = document.getElementById('button-meeting-leave');
-    buttonMeetingLeave.addEventListener('click', _e => {
-      new AsyncScheduler().start(async () => {
+    buttonMeetingLeave.addEventListener('click', e => {
+      if (e.shiftKey) {
+        this.behaviorAfterLeave = 'halt';
+      };
+      AsyncScheduler.nextTick(async () => {
         (buttonMeetingLeave as HTMLButtonElement).disabled = true;
-        this.leave();
+        await this.leave();
         (buttonMeetingLeave as HTMLButtonElement).disabled = false;
       });
     });
   }
 
-  getSupportedMediaRegions(): Array<string> {
-    const supportedMediaRegions: Array<string> = [];
-    const mediaRegion = (document.getElementById("inputRegion")) as HTMLSelectElement;
-    for (var i = 0; i < mediaRegion.length; i++) {
+  logPPS() {
+    let start = 0;
+    let packets = 0;
+    setInterval(async () => {
+      if (!this.audioVideo) {
+        return;
+      }
+
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const stats = await this.audioVideo.getRTCPeerConnectionStats() as RTCStatsReport & RTCStats & Map<string, any>;
+
+      if (!stats) {
+        return;
+      }
+
+      if (!start) {
+        start = Date.now();
+        return;
+      }
+
+      for (const [_, entry] of stats.entries()) {
+        if (entry.type === 'outbound-rtp') {
+          const now = Date.now();
+          const deltat = now - start;
+          const deltap = entry.packetsSent - packets;
+          console.info('PPS:', (1000 * deltap) / deltat);
+          start = now;
+          packets = entry.packetsSent;
+          return;
+        }
+      }
+    }, 1_000);
+  }
+
+  getSupportedMediaRegions(): string[] {
+    const supportedMediaRegions: string[] = [];
+    const mediaRegion = document.getElementById('inputRegion') as HTMLSelectElement;
+    for (let i = 0; i < mediaRegion.length; i++) {
       supportedMediaRegions.push(mediaRegion.value);
     }
     return supportedMediaRegions;
   }
 
   async getNearestMediaRegion(): Promise<string> {
-    const nearestMediaRegionResponse = await fetch(
-      `https://nearest-media-region.l.chime.aws`,
-      {
-        method: 'GET',
-      }
-    );
+    const nearestMediaRegionResponse = await fetch(`https://nearest-media-region.l.chime.aws`, {
+      method: 'GET',
+    });
     const nearestMediaRegionJSON = await nearestMediaRegionResponse.json();
     const nearestMediaRegion = nearestMediaRegionJSON.region;
     return nearestMediaRegion;
   }
 
   setMediaRegion(): void {
-    new AsyncScheduler().start(
+    AsyncScheduler.nextTick(
       async (): Promise<void> => {
         try {
-          const nearestMediaRegion = await this.getNearestMediaRegion();
+          const query = new URLSearchParams(document.location.search);
+          const region = query.get('region');
+          const nearestMediaRegion = region ? region : await this.getNearestMediaRegion();
           if (nearestMediaRegion === '' || nearestMediaRegion === null) {
             throw new Error('Nearest Media Region cannot be null or empty');
           }
-          const supportedMediaRegions: Array<string> = this.getSupportedMediaRegions();
-          if (supportedMediaRegions.indexOf(nearestMediaRegion) === -1 ) {
+          const supportedMediaRegions: string[] = this.getSupportedMediaRegions();
+          if (supportedMediaRegions.indexOf(nearestMediaRegion) === -1) {
             supportedMediaRegions.push(nearestMediaRegion);
-            const mediaRegionElement = (document.getElementById("inputRegion")) as HTMLSelectElement;
-            const newMediaRegionOption = document.createElement("option");
+            const mediaRegionElement = document.getElementById('inputRegion') as HTMLSelectElement;
+            const newMediaRegionOption = document.createElement('option');
             newMediaRegionOption.value = nearestMediaRegion;
-            newMediaRegionOption.text = nearestMediaRegion + " (" + nearestMediaRegion + ")";
+            newMediaRegionOption.text = nearestMediaRegion + ' (' + nearestMediaRegion + ')';
             mediaRegionElement.add(newMediaRegionOption, null);
           }
           (document.getElementById('inputRegion') as HTMLInputElement).value = nearestMediaRegion;
         } catch (error) {
+          fatal(error);
           this.log('Default media region selected: ' + error.message);
         }
-      });
+      }
+    );
   }
+
+
 
   toggleButton(button: string, state?: 'on' | 'off'): boolean {
     if (state === 'on') {
@@ -715,7 +1090,7 @@ export class DemoMeetingApp implements
     return this.buttonStates[button];
   }
 
-  isButtonOn(button: string) {
+  isButtonOn(button: string): boolean {
     return this.buttonStates[button];
   }
 
@@ -767,7 +1142,9 @@ export class DemoMeetingApp implements
       return;
     }
 
-    const freshDeviceWithSameID = freshDevices.find((device) => device.deviceId === this.currentAudioInputDevice);
+    const freshDeviceWithSameID = freshDevices.find(
+      device => device.deviceId === this.currentAudioInputDevice
+    );
 
     if (freshDeviceWithSameID === undefined) {
       this.log('Existing device disappeared. Selecting a new one.');
@@ -797,44 +1174,72 @@ export class DemoMeetingApp implements
     this.log(`Current video input stream from device id ${deviceId} ended.`);
   }
 
-  estimatedDownlinkBandwidthLessThanRequired(estimatedDownlinkBandwidthKbps: number, requiredVideoDownlinkBandwidthKbps: number ): void {
-    this.log(`Estimated downlink bandwidth is ${estimatedDownlinkBandwidthKbps} is less than required bandwidth for video ${requiredVideoDownlinkBandwidthKbps}`);
+  estimatedDownlinkBandwidthLessThanRequired(
+    estimatedDownlinkBandwidthKbps: number,
+    requiredVideoDownlinkBandwidthKbps: number
+  ): void {
+    this.log(
+      `Estimated downlink bandwidth is ${estimatedDownlinkBandwidthKbps} is less than required bandwidth for video ${requiredVideoDownlinkBandwidthKbps}`
+    );
   }
 
   videoNotReceivingEnoughData(videoReceivingReports: ClientVideoStreamReceivingReport[]): void {
-    this.log(`One or more video streams are not receiving expected amounts of data ${JSON.stringify(videoReceivingReports)}`);
+    this.log(
+      `One or more video streams are not receiving expected amounts of data ${JSON.stringify(
+        videoReceivingReports
+      )}`
+    );
   }
 
   metricsDidReceive(clientMetricReport: ClientMetricReport): void {
     const metricReport = clientMetricReport.getObservableMetrics();
-    if (typeof metricReport.availableSendBandwidth === 'number' && !isNaN(metricReport.availableSendBandwidth)) {
+    this.videoMetricReport = clientMetricReport.getObservableVideoMetrics();
+    if (
+      typeof metricReport.availableSendBandwidth === 'number' &&
+      !isNaN(metricReport.availableSendBandwidth)
+    ) {
       (document.getElementById('video-uplink-bandwidth') as HTMLSpanElement).innerText =
-        'Available Uplink Bandwidth: ' + String(metricReport.availableSendBandwidth / 1000) + ' Kbps';
-    } else if (typeof metricReport.availableOutgoingBitrate === 'number' && !isNaN(metricReport.availableOutgoingBitrate)) {
+        'Available Uplink Bandwidth: ' +
+        String(metricReport.availableSendBandwidth / 1000) +
+        ' Kbps';
+    } else if (
+      typeof metricReport.availableOutgoingBitrate === 'number' &&
+      !isNaN(metricReport.availableOutgoingBitrate)
+    ) {
       (document.getElementById('video-uplink-bandwidth') as HTMLSpanElement).innerText =
-        'Available Uplink Bandwidth: ' + String(metricReport.availableOutgoingBitrate / 1000) + ' Kbps';
+        'Available Uplink Bandwidth: ' +
+        String(metricReport.availableOutgoingBitrate / 1000) +
+        ' Kbps';
     } else {
       (document.getElementById('video-uplink-bandwidth') as HTMLSpanElement).innerText =
         'Available Uplink Bandwidth: Unknown';
     }
 
-    if (typeof metricReport.availableReceiveBandwidth === 'number' && !isNaN(metricReport.availableReceiveBandwidth)) {
+    if (
+      typeof metricReport.availableReceiveBandwidth === 'number' &&
+      !isNaN(metricReport.availableReceiveBandwidth)
+    ) {
       (document.getElementById('video-downlink-bandwidth') as HTMLSpanElement).innerText =
-        'Available Downlink Bandwidth: ' + String(metricReport.availableReceiveBandwidth / 1000) + ' Kbps';
-    } else if (typeof metricReport.availableIncomingBitrate === 'number' && !isNaN(metricReport.availableIncomingBitrate)) {
+        'Available Downlink Bandwidth: ' +
+        String(metricReport.availableReceiveBandwidth / 1000) +
+        ' Kbps';
+    } else if (
+      typeof metricReport.availableIncomingBitrate === 'number' &&
+      !isNaN(metricReport.availableIncomingBitrate)
+    ) {
       (document.getElementById('video-downlink-bandwidth') as HTMLSpanElement).innerText =
-        'Available Downlink Bandwidth: ' + String(metricReport.availableIncomingBitrate / 1000) + ' Kbps';
+        'Available Downlink Bandwidth: ' +
+        String(metricReport.availableIncomingBitrate / 1000) +
+        ' Kbps';
     } else {
       (document.getElementById('video-downlink-bandwidth') as HTMLSpanElement).innerText =
         'Available Downlink Bandwidth: Unknown';
     }
 
-    this.hasChromiumWebRTC &&
-    this.isButtonOn('button-video-stats') &&
-    this.getAndShowWebRTCStats();
+    this.isButtonOn('button-video-stats') && this.showVideoWebRTCStats(this.videoMetricReport);
   }
 
-  getAndShowWebRTCStats() {
+  showVideoWebRTCStats(videoMetricReport: { [id: string]: { [id: string]: {} } }): void {
     const videoTiles = this.audioVideo.getAllVideoTiles();
     if (videoTiles.length === 0) {
       return;
@@ -846,33 +1251,100 @@ export class DemoMeetingApp implements
       }
       const tileId = videoTile.id();
       const tileIndex = this.tileIdToTileIndex[tileId];
-      this.getStats(tileIndex);
       if (tileState.localTile) {
-        this.statsCollector.showUpstreamStats(tileIndex);
+        this.showVideoStats(tileIndex, this.videoUpstreamMetricsKeyStats, videoMetricReport[tileState.boundAttendeeId], 'Upstream');
       } else {
-        this.statsCollector.showDownstreamStats(tileIndex);
+        this.showVideoStats(tileIndex, this.videoDownstreamMetricsKeyStats, videoMetricReport[tileState.boundAttendeeId], 'Downstream');
       }
     }
-
   }
 
-  async getStats(tileIndex: number) {
-    const id = `video-${tileIndex}`;
-    const videoElement = document.getElementById(id) as HTMLVideoElement;
-    if (!videoElement || !videoElement.srcObject) {
+  showVideoStats = (
+    tileIndex: number,
+    keyStatstoShow: { [key: string]: string },
+    metricsData: { [id: string]: {[key: string]: number} },
+    streamDirection: string,
+  ): void => {
+    const streams = metricsData ? Object.keys(metricsData) : [];
+    if (streams.length === 0) {
       return;
     }
 
-    const stream = videoElement.srcObject as MediaStream;
-    const tracks = stream.getVideoTracks();
-    if (tracks.length === 0) {
-      return;
+    let statsInfo: HTMLDivElement = document.getElementById(
+      `stats-info-${tileIndex}`
+    ) as HTMLDivElement;
+    if (!statsInfo) {
+      statsInfo = document.createElement('div');
+      statsInfo.setAttribute('id', `stats-info-${tileIndex}`);
+      statsInfo.setAttribute('class', `stats-info`);
     }
-    const report = await this.audioVideo.getRTCPeerConnectionStats(tracks[0]);
-    this.statsCollector.processWebRTCStatReportForTileIndex(report, tileIndex);
+
+    const statsInfoTableId = `stats-table-${tileIndex}`;
+    let statsInfoTable = document.getElementById(statsInfoTableId) as HTMLTableElement;
+    if (statsInfoTable) {
+      statsInfo.removeChild(statsInfoTable);
+    }
+    statsInfoTable = document.createElement('table') as HTMLTableElement;
+    statsInfoTable.setAttribute('id', statsInfoTableId);
+    statsInfoTable.setAttribute('class', 'stats-table');
+    statsInfo.appendChild(statsInfoTable);
+
+    const videoEl = document.getElementById(`video-${tileIndex}`) as HTMLVideoElement;
+    videoEl.insertAdjacentElement('afterend', statsInfo);
+    const header = statsInfoTable.insertRow(-1);
+    let cell = header.insertCell(-1);
+    cell.innerHTML = 'Video statistics';
+    for (let cnt = 0; cnt < streams.length; cnt++) {
+      cell = header.insertCell(-1);
+      cell.innerHTML = `${streamDirection} ${cnt + 1}`;
+    }
+
+    for (const ssrc of streams) {
+      for (const [metricName, value] of Object.entries(metricsData[ssrc])) {
+        if (keyStatstoShow[metricName]) {
+          const rowElement = document.getElementById(
+            `${metricName}-${tileIndex}`
+          ) as HTMLTableRowElement;
+          const row = rowElement ? rowElement : statsInfoTable.insertRow(-1);
+          if (!rowElement) {
+            row.setAttribute('id', `${metricName}-${tileIndex}`);
+            cell = row.insertCell(-1);
+            cell.innerHTML = keyStatstoShow[metricName];
+          }
+            cell = row.insertCell(-1);
+            cell.innerHTML = `${value}`;
+        }
+      }
+    }
+  };
+
+  resetStats = (): void => {
+    this.videoMetricReport = {};
+  };
+
+  async getRelayProtocol(): Promise<void> {
+    const rawStats = await this.audioVideo.getRTCPeerConnectionStats();
+    if (rawStats) {
+      rawStats.forEach(report => {
+        if (report.type === 'local-candidate') {
+          this.log(`Local WebRTC Ice Candidate stats: ${JSON.stringify(report)}`);
+          const relayProtocol = report.relayProtocol;
+          if (typeof relayProtocol === 'string') {
+            if (relayProtocol === 'udp') {
+              this.log(`Connection using ${relayProtocol.toUpperCase()} protocol`);
+            } else {
+              this.log(`Connection fell back to ${relayProtocol.toUpperCase()} protocol`);
+            }
+          }
+        }
+      });
+    }
   }
 
-  async createLogStream(configuration: MeetingSessionConfiguration, pathname: string): Promise<void> {
+  async createLogStream(
+    configuration: MeetingSessionConfiguration,
+    pathname: string
+  ): Promise<void> {
     const body = JSON.stringify({
       meetingId: configuration.meetingId,
       attendeeId: configuration.credentials.attendeeId,
@@ -880,12 +1352,13 @@ export class DemoMeetingApp implements
     try {
       const response = await fetch(`${DemoMeetingApp.BASE_URL}${pathname}`, {
         method: 'POST',
-        body
+        body,
       });
       if (response.status === 200) {
         console.log('[DEMO] log stream created');
       }
     } catch (error) {
+      fatal(error);
       this.log(error.message);
     }
   }
@@ -896,12 +1369,19 @@ export class DemoMeetingApp implements
     switch (name) {
       case 'meetingStartRequested':
       case 'meetingStartSucceeded':
-      case 'meetingEnded': {
+      case 'meetingEnded':
+      case 'audioInputSelected':
+      case 'videoInputSelected':
+      case 'audioInputUnselected':
+      case 'videoInputUnselected':
+      case 'attendeePresenceReceived': {
         // Exclude the "meetingHistory" attribute for successful events.
-        this.meetingEventPOSTLogger?.info(JSON.stringify({
-          name,
-          attributes: otherAttributes
-        }));
+        this.meetingEventPOSTLogger?.info(
+          JSON.stringify({
+            name,
+            attributes: otherAttributes,
+          })
+        );
         break;
       }
       case 'audioInputFailed':
@@ -909,42 +1389,43 @@ export class DemoMeetingApp implements
       case 'meetingStartFailed':
       case 'meetingFailed': {
         // Send the last 5 minutes of events.
-        this.meetingEventPOSTLogger?.info(JSON.stringify({
-          name,
-          attributes: {
-            ...otherAttributes,
-            meetingHistory: meetingHistory.filter(({ timestampMs }) => {
-              return Date.now() - timestampMs < DemoMeetingApp.MAX_MEETING_HISTORY_MS;
-            })
-          }
-        }));
+        this.meetingEventPOSTLogger?.info(
+          JSON.stringify({
+            name,
+            attributes: {
+              ...otherAttributes,
+              meetingHistory: meetingHistory.filter(({ timestampMs }) => {
+                return Date.now() - timestampMs < DemoMeetingApp.MAX_MEETING_HISTORY_MS;
+              }),
+            },
+          })
+        );
         break;
       }
     }
   }
 
   async initializeMeetingSession(configuration: MeetingSessionConfiguration): Promise<void> {
-    let logger: Logger;
     const logLevel = LogLevel.INFO;
-    const consoleLogger = logger = new ConsoleLogger('SDK', logLevel);
-    if (location.hostname === 'localhost' || location.hostname === '127.0.0.1') {
-      logger = consoleLogger;
+    const consoleLogger = (this.meetingLogger = new ConsoleLogger('SDK', logLevel));
+    if (this.isLocalHost()) {
+      this.meetingLogger = consoleLogger;
     } else {
       await Promise.all([
         this.createLogStream(configuration, 'create_log_stream'),
-        this.createLogStream(configuration, 'create_browser_event_log_stream')
+        this.createLogStream(configuration, 'create_browser_event_log_stream'),
       ]);
-
-      logger = new MultiLogger(
+      this.meetingSessionPOSTLogger = new MeetingSessionPOSTLogger(
+        'SDK',
+        configuration,
+        DemoMeetingApp.LOGGER_BATCH_SIZE,
+        DemoMeetingApp.LOGGER_INTERVAL_MS,
+        `${DemoMeetingApp.BASE_URL}logs`,
+        logLevel
+      );
+      this.meetingLogger = new MultiLogger(
         consoleLogger,
-        new MeetingSessionPOSTLogger(
-          'SDK',
-          configuration,
-          DemoMeetingApp.LOGGER_BATCH_SIZE,
-          DemoMeetingApp.LOGGER_INTERVAL_MS,
-          `${DemoMeetingApp.BASE_URL}logs`,
-          logLevel
-        ),
+        this.meetingSessionPOSTLogger,
       );
       this.meetingEventPOSTLogger = new MeetingSessionPOSTLogger(
         'SDKEvent',
@@ -955,23 +1436,49 @@ export class DemoMeetingApp implements
         logLevel
       );
     }
-    const deviceController = new DefaultDeviceController(logger, { enableWebAudio: this.enableWebAudio });
+    this.eventReporter = await this.setupEventReporter(configuration);
+    const deviceController = new DefaultDeviceController(this.meetingLogger, {
+      enableWebAudio: this.enableWebAudio,
+    });
     configuration.enableUnifiedPlanForChromiumBasedBrowsers = this.enableUnifiedPlanForChromiumBasedBrowsers;
-    configuration.attendeePresenceTimeoutMs = 5000;
+    const urlParameters = new URL(window.location.href).searchParams;
+    const timeoutMs = Number(urlParameters.get('attendee-presence-timeout-ms'));
+    if (!isNaN(timeoutMs)) {
+      configuration.attendeePresenceTimeoutMs = Number(timeoutMs);
+    }
     configuration.enableSimulcastForUnifiedPlanChromiumBasedBrowsers = this.enableSimulcast;
-    this.meetingSession = new DefaultMeetingSession(configuration, logger, deviceController);
+    if (this.usePriorityBasedDownlinkPolicy) {
+      this.priorityBasedDownlinkPolicy = new VideoPriorityBasedPolicy(this.meetingLogger);
+      configuration.videoDownlinkBandwidthPolicy = this.priorityBasedDownlinkPolicy;
+      this.priorityBasedDownlinkPolicy.addObserver(this);
+    }
+
+    this.meetingSession = new DefaultMeetingSession(
+      configuration,
+      this.meetingLogger,
+      deviceController,
+      this.eventReporter
+    );
+    if (this.usePriorityBasedDownlinkPolicy) {
+      this.priorityBasedDownlinkPolicy = new VideoPriorityBasedPolicy(this.meetingLogger, this.videoPriorityBasedPolicyConfig);
+      configuration.videoDownlinkBandwidthPolicy = this.priorityBasedDownlinkPolicy;
+    }
+
     if ((document.getElementById('fullband-speech-mono-quality') as HTMLInputElement).checked) {
       this.meetingSession.audioVideo.setAudioProfile(AudioProfile.fullbandSpeechMono());
       this.meetingSession.audioVideo.setContentAudioProfile(AudioProfile.fullbandSpeechMono());
-    } else if ((document.getElementById('fullband-music-mono-quality') as HTMLInputElement).checked) {
+    } else if (
+      (document.getElementById('fullband-music-mono-quality') as HTMLInputElement).checked
+    ) {
       this.meetingSession.audioVideo.setAudioProfile(AudioProfile.fullbandMusicMono());
       this.meetingSession.audioVideo.setContentAudioProfile(AudioProfile.fullbandMusicMono());
     }
     this.audioVideo = this.meetingSession.audioVideo;
-
+    if (this.enableSimulcast) {
+      this.audioVideo.chooseVideoInputQuality(1280, 720, 15, 1400);
+    }
     this.audioVideo.addDeviceChangeObserver(this);
     this.setupDeviceLabelTrigger();
-    await this.populateAllDeviceLists();
     this.setupMuteHandler();
     this.setupCanUnmuteHandler();
     this.setupSubscribeToAttendeeIdPresenceHandler();
@@ -981,18 +1488,66 @@ export class DemoMeetingApp implements
     this.initContentShareDropDownItems();
   }
 
+  async setupEventReporter(configuration: MeetingSessionConfiguration): Promise<EventReporter> {
+    let eventReporter: EventReporter;
+    const ingestionURL = configuration.urls.eventIngestionURL;
+    if (!ingestionURL) {
+      return eventReporter;
+    }
+    if (!this.enableEventReporting) {
+      return new NoOpEventReporter();
+    }
+    const eventReportingLogger = new ConsoleLogger('SDKEventIngestion', LogLevel.INFO);
+    const meetingEventClientConfig = new MeetingEventsClientConfiguration(
+      configuration.meetingId,
+      configuration.credentials.attendeeId,
+      configuration.credentials.joinToken
+    );
+    const eventIngestionConfiguration = new EventIngestionConfiguration(
+      meetingEventClientConfig,
+      ingestionURL
+    );
+    if (this.isLocalHost()) {
+      eventReporter = new DefaultMeetingEventReporter(eventIngestionConfiguration, eventReportingLogger);
+    } else {
+      await this.createLogStream(configuration, 'create_browser_event_ingestion_log_stream');
+      const eventReportingPOSTLogger = new MeetingSessionPOSTLogger(
+        'SDKEventIngestion',
+        configuration,
+        DemoMeetingApp.LOGGER_BATCH_SIZE,
+        DemoMeetingApp.LOGGER_INTERVAL_MS,
+        `${DemoMeetingApp.BASE_URL}log_event_ingestion`,
+        LogLevel.DEBUG
+      );
+      const multiEventReportingLogger = new MultiLogger(
+        eventReportingLogger,
+        eventReportingPOSTLogger,
+      );
+      eventReporter = new DefaultMeetingEventReporter(eventIngestionConfiguration, multiEventReportingLogger);
+    }
+    return eventReporter;
+  }
+
+  private isLocalHost(): boolean {
+    return document.location.host === '127.0.0.1:8080' || document.location.host === 'localhost:8080';
+  }
+
   async join(): Promise<void> {
     window.addEventListener('unhandledrejection', (event: PromiseRejectionEvent) => {
       this.log(event.reason);
     });
+
     this.audioVideo.start();
   }
 
-  leave(): void {
-    this.statsCollector.resetStats();
+  async leave(): Promise<void> {
+    this.resetStats();
     this.audioVideo.stop();
-    this.voiceFocusDevice?.stop();
+    await this.voiceFocusDevice?.stop();
     this.voiceFocusDevice = undefined;
+
+    await this.chosenVideoTransformDevice?.stop();
+    this.chosenVideoTransformDevice = undefined;
     this.roster = {};
   }
 
@@ -1043,8 +1598,6 @@ export class DemoMeetingApp implements
       } else if (this.roster[attendeeId].active) {
         statusText = 'SPEAKING';
         statusClass += 'badge-success';
-      } else if (this.roster[attendeeId].volume > 0) {
-        statusClass += 'badge-success';
       }
       this.updateProperty(spanName, 'innerText', this.roster[attendeeId].name);
       this.updateProperty(spanStatus, 'innerText', statusText);
@@ -1053,17 +1606,27 @@ export class DemoMeetingApp implements
     }
   }
 
-  updateProperty(obj: any, key: string, value: string) {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  updateProperty(obj: any, key: string, value: string): void {
     if (value !== undefined && obj[key] !== value) {
       obj[key] = value;
     }
   }
 
   setupSubscribeToAttendeeIdPresenceHandler(): void {
-    const handler = (attendeeId: string, present: boolean, externalUserId: string, dropped: boolean): void => {
+    const handler = (
+      attendeeId: string,
+      present: boolean,
+      externalUserId: string,
+      dropped: boolean
+    ): void => {
       this.log(`${attendeeId} present = ${present} (${externalUserId})`);
-      const isContentAttendee = new DefaultModality(attendeeId).hasModality(DefaultModality.MODALITY_CONTENT);
-      const isSelfAttendee = new DefaultModality(attendeeId).base() === this.meetingSession.configuration.credentials.attendeeId;
+      const isContentAttendee = new DefaultModality(attendeeId).hasModality(
+        DefaultModality.MODALITY_CONTENT
+      );
+      const isSelfAttendee =
+        new DefaultModality(attendeeId).base() ===
+        this.meetingSession.configuration.credentials.attendeeId;
       if (!present) {
         delete this.roster[attendeeId];
         this.updateRoster();
@@ -1071,12 +1634,18 @@ export class DemoMeetingApp implements
         return;
       }
       //If someone else share content, stop the current content share
-      if (!this.allowMaxContentShare() && !isSelfAttendee && isContentAttendee && this.isButtonOn('button-content-share')) {
+      if (
+        !this.allowMaxContentShare() &&
+        !isSelfAttendee &&
+        isContentAttendee &&
+        this.isButtonOn('button-content-share')
+      ) {
         this.contentShareStop();
       }
-      if (!this.roster[attendeeId]) {
+      if (!this.roster[attendeeId] || !this.roster[attendeeId].name) {
         this.roster[attendeeId] = {
-          name: (externalUserId.split('#').slice(-1)[0]) + (isContentAttendee ? ' «Content»' : ''),
+          ...this.roster[attendeeId],
+          ... {name: externalUserId.split('#').slice(-1)[0] + (isContentAttendee ? ' «Content»' : '')}
         };
       }
       this.audioVideo.realtimeSubscribeToVolumeIndicator(
@@ -1103,8 +1672,12 @@ export class DemoMeetingApp implements
         }
       );
     };
+
+    this.attendeeIdPresenceHandler = handler;
     this.audioVideo.realtimeSubscribeToAttendeeIdPresence(handler);
-    const activeSpeakerHandler = (attendeeIds: string[]): void => {
+
+    // Hang on to this so we can unsubscribe later.
+    this.activeSpeakerHandler = (attendeeIds: string[]): void => {
       for (const attendeeId in this.roster) {
         this.roster[attendeeId].active = false;
       }
@@ -1116,29 +1689,31 @@ export class DemoMeetingApp implements
       }
       this.layoutFeaturedTile();
     };
+
+    const scoreHandler = (scores: { [attendeeId: string]: number }) => {
+      for (const attendeeId in scores) {
+        if (this.roster[attendeeId]) {
+          this.roster[attendeeId].score = scores[attendeeId];
+        }
+      }
+      this.updateRoster();
+    };
+
     this.audioVideo.subscribeToActiveSpeakerDetector(
       new DefaultActiveSpeakerPolicy(),
-      activeSpeakerHandler,
-      (scores: {[attendeeId:string]: number}) => {
-        for (const attendeeId in scores) {
-          if (this.roster[attendeeId]) {
-            this.roster[attendeeId].score = scores[attendeeId];
-          }
-        }
-        this.updateRoster();
-      },
-      this.showActiveSpeakerScores ? 100 : 0,
+      this.activeSpeakerHandler,
+      scoreHandler,
+      this.showActiveSpeakerScores ? 100 : 0
     );
   }
-
 
   async getStatsForOutbound(id: string): Promise<void> {
     const videoElement = document.getElementById(id) as HTMLVideoElement;
     const stream = videoElement.srcObject as MediaStream;
     const track = stream.getVideoTracks()[0];
-    let basicReports: {[id: string]: number} =  {};
+    const basicReports: { [id: string]: number } = {};
 
-    let reports = await this.audioVideo.getRTCPeerConnectionStats(track);
+    const reports = await this.audioVideo.getRTCPeerConnectionStats(track);
     let duration: number;
 
     reports.forEach(report => {
@@ -1154,16 +1729,20 @@ export class DemoMeetingApp implements
     });
 
     await new TimeoutScheduler(1000).start(() => {
-      this.audioVideo.getRTCPeerConnectionStats(track).then((reports) => {
+      this.audioVideo.getRTCPeerConnectionStats(track).then(reports => {
         reports.forEach(report => {
           if (report.type === 'outbound-rtp') {
             duration = report.timestamp - duration;
             duration = duration / 1000;
             // remained to be calculated
-            basicReports['bitrate'] =  Math.trunc((report.bytesSent - basicReports['bitrate']) * 8 / duration);
+            basicReports['bitrate'] = Math.trunc(
+              ((report.bytesSent - basicReports['bitrate']) * 8) / duration
+            );
             basicReports['width'] = report.frameWidth;
             basicReports['height'] = report.frameHeight;
-            basicReports['fps'] = Math.trunc((report.framesEncoded - basicReports['fps']) / duration);
+            basicReports['fps'] = Math.trunc(
+              (report.framesEncoded - basicReports['fps']) / duration
+            );
             this.log(JSON.stringify(basicReports));
           }
         });
@@ -1173,7 +1752,8 @@ export class DemoMeetingApp implements
 
   dataMessageHandler(dataMessage: DataMessage): void {
     if (!dataMessage.throttled) {
-      const isSelf = dataMessage.senderAttendeeId === this.meetingSession.configuration.credentials.attendeeId;
+      const isSelf =
+        dataMessage.senderAttendeeId === this.meetingSession.configuration.credentials.attendeeId;
       if (dataMessage.timestampMs <= this.lastReceivedMessageTimestamp) {
         return;
       }
@@ -1181,17 +1761,19 @@ export class DemoMeetingApp implements
       const messageDiv = document.getElementById('receive-message') as HTMLDivElement;
       const messageNameSpan = document.createElement('div') as HTMLDivElement;
       messageNameSpan.classList.add('message-bubble-sender');
-      messageNameSpan.innerText = (dataMessage.senderExternalUserId.split('#').slice(-1)[0]);
+      messageNameSpan.innerText = dataMessage.senderExternalUserId.split('#').slice(-1)[0];
       const messageTextSpan = document.createElement('div') as HTMLDivElement;
       messageTextSpan.classList.add(isSelf ? 'message-bubble-self' : 'message-bubble-other');
-      messageTextSpan.innerHTML = this.markdown.render(dataMessage.text()).replace(/[<]a /g, '<a target="_blank" ');
-      const appendClass = (element: HTMLElement, className: string) => {
+      messageTextSpan.innerHTML = this.markdown
+        .render(dataMessage.text())
+        .replace(/[<]a /g, '<a target="_blank" ');
+      const appendClass = (element: HTMLElement, className: string): void => {
         for (let i = 0; i < element.children.length; i++) {
           const child = element.children[i] as HTMLElement;
           child.classList.add(className);
           appendClass(child, className);
         }
-      }
+      };
       appendClass(messageTextSpan, 'markdown');
       if (this.lastMessageSender !== dataMessage.senderAttendeeId) {
         messageDiv.appendChild(messageNameSpan);
@@ -1205,15 +1787,20 @@ export class DemoMeetingApp implements
   }
 
   setupDataMessage(): void {
-    this.audioVideo.realtimeSubscribeToReceiveDataMessage(DemoMeetingApp.DATA_MESSAGE_TOPIC, (dataMessage: DataMessage) => {
-      this.dataMessageHandler(dataMessage);
-    });
+    this.audioVideo.realtimeSubscribeToReceiveDataMessage(
+      DemoMeetingApp.DATA_MESSAGE_TOPIC,
+      (dataMessage: DataMessage) => {
+        this.dataMessageHandler(dataMessage);
+      }
+    );
   }
 
   // eslint-disable-next-line
   async joinMeeting(): Promise<any> {
     const response = await fetch(
-      `${DemoMeetingApp.BASE_URL}join?title=${encodeURIComponent(this.meeting)}&name=${encodeURIComponent(this.name)}&region=${encodeURIComponent(this.region)}`,
+      `${DemoMeetingApp.BASE_URL}join?title=${encodeURIComponent(
+        this.meeting
+      )}&name=${encodeURIComponent(this.name)}&region=${encodeURIComponent(this.region)}`,
       {
         method: 'POST',
       }
@@ -1225,6 +1812,21 @@ export class DemoMeetingApp implements
     return json;
   }
 
+  async startMediaCapture(): Promise<any> {
+    await fetch(
+      `${DemoMeetingApp.BASE_URL}startCapture?title=${encodeURIComponent(this.meeting)}`, {
+        method: 'POST',
+      });
+  }
+
+  async stopMediaCapture(): Promise<any> {
+    await fetch(
+      `${DemoMeetingApp.BASE_URL}endCapture?title=${encodeURIComponent(this.meeting)}`, {
+        method: 'POST',
+      });
+  }
+
+
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   async endMeeting(): Promise<any> {
     await fetch(`${DemoMeetingApp.BASE_URL}end?title=${encodeURIComponent(this.meeting)}`, {
@@ -1234,7 +1836,11 @@ export class DemoMeetingApp implements
 
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   async getAttendee(attendeeId: string): Promise<any> {
-    const response = await fetch(`${DemoMeetingApp.BASE_URL}attendee?title=${encodeURIComponent(this.meeting)}&attendee=${encodeURIComponent(attendeeId)}`);
+    const response = await fetch(
+      `${DemoMeetingApp.BASE_URL}attendee?title=${encodeURIComponent(
+        this.meeting
+      )}&attendee=${encodeURIComponent(attendeeId)}`
+    );
     const json = await response.json();
     if (json.error) {
       throw new Error(`Server error: ${json.error}`);
@@ -1339,15 +1945,9 @@ export class DemoMeetingApp implements
       this.createDropdownMenuItem(menu, '──────────', () => {}).classList.add('text-center');
       for (const { name, oncreate, action } of additionalToggles) {
         const id = `toggle-${elementId}-${name.replace(/\s/g, '-')}`;
-        const elem = this.createDropdownMenuItem(
-          menu,
-          name,
-          action,
-          id
-        );
+        const elem = this.createDropdownMenuItem(menu, name, action, id);
         oncreate(elem);
       }
-
     }
     if (!menu.firstElementChild) {
       this.createDropdownMenuItem(menu, 'Device selection unavailable', () => {});
@@ -1375,6 +1975,67 @@ export class DemoMeetingApp implements
     await this.populateAudioInputList();
     await this.populateVideoInputList();
     await this.populateAudioOutputList();
+  }
+
+  private async selectVideoFilterByName(name: VideoFilterName): Promise<void> {
+    this.selectedVideoFilterItem = name;
+    this.log(`clicking video filter ${this.selectedVideoFilterItem}`);
+    this.toggleButton(
+      'button-video-filter',
+      this.selectedVideoFilterItem === 'None' ? 'off' : 'on'
+    );
+    if (this.isButtonOn('button-camera')) {
+      try {
+        await this.openVideoInputFromSelection(this.selectedVideoInput, false);
+      } catch (err) {
+        fatal(err);
+        this.log('Failed to choose VideoTransformDevice', err);
+      }
+    }
+  }
+
+  private async populateVideoFilterInputList(): Promise<void> {
+    const genericName = 'Filter';
+    let filters: VideoFilterName[] = ['None'];
+
+    if (
+      this.defaultBrowserBehaviour.supportsCanvasCapturedStreamPlayback() &&
+      this.enableUnifiedPlanForChromiumBasedBrowsers
+    ) {
+      filters = filters.concat(VIDEO_FILTERS);
+      if (platformCanSupportBodyPixWithoutDegradation()) {
+        if (!this.loadingBodyPixDependencyPromise) {
+          this.loadingBodyPixDependencyPromise = loadBodyPixDependency(this.loadingBodyPixDependencyTimeoutMs);
+        }
+        // do not use `await` to avoid blocking page loading
+        this.loadingBodyPixDependencyPromise.then(() => {
+          filters.push('Segmentation');
+          this.populateInMeetingDeviceList(
+            'dropdown-menu-filter',
+            genericName,
+            [],
+            filters,
+            undefined,
+            async (name: VideoFilterName) => {
+              await this.selectVideoFilterByName(name);
+            }
+          );
+        }).catch(err => {
+          this.log('Could not load BodyPix dependency', err);
+        });
+      }
+    }
+
+    this.populateInMeetingDeviceList(
+      'dropdown-menu-filter',
+      genericName,
+      [],
+      filters,
+      undefined,
+      async (name: VideoFilterName) => {
+        await this.selectVideoFilterByName(name);
+      }
+    );
   }
 
   async populateAudioInputList(): Promise<void> {
@@ -1416,7 +2077,7 @@ export class DemoMeetingApp implements
     return this.currentAudioInputDevice instanceof VoiceFocusTransformDevice;
   }
 
-  private updateVoiceFocusDisplayState() {
+  private updateVoiceFocusDisplayState(): void {
     const active = this.isVoiceFocusActive();
     this.log('Updating Amazon Voice Focus display state:', active);
     for (const elem of this.voiceFocusDisplayables) {
@@ -1431,7 +2092,7 @@ export class DemoMeetingApp implements
   }
 
   private async reselectAudioInputDevice(): Promise<void> {
-    let current = this.currentAudioInputDevice;
+    const current = this.currentAudioInputDevice;
 
     if (current instanceof VoiceFocusTransformDevice) {
       // Unwrap and rewrap if Amazon Voice Focus is selected.
@@ -1451,7 +2112,7 @@ export class DemoMeetingApp implements
   }
 
   private async toggleVoiceFocusInMeeting(): Promise<void> {
-    const elem = (document.getElementById('add-voice-focus') as HTMLInputElement);
+    const elem = document.getElementById('add-voice-focus') as HTMLInputElement;
     this.enableVoiceFocus = this.supportsVoiceFocus && !this.enableVoiceFocus;
     elem.checked = this.enableVoiceFocus;
     this.log('Amazon Voice Focus toggle is now', elem.checked);
@@ -1478,42 +2139,54 @@ export class DemoMeetingApp implements
         try {
           await this.openVideoInputFromSelection(name, false);
         } catch (err) {
-          this.log('no video input device selected');
+          fatal(err);
         }
       }
     );
     const cameras = await this.audioVideo.listVideoInputDevices();
-    this.cameraDeviceIds = cameras.map((deviceInfo) => {
+    this.cameraDeviceIds = cameras.map(deviceInfo => {
       return deviceInfo.deviceId;
     });
   }
 
   async populateAudioOutputList(): Promise<void> {
+    const supportsChoosing = this.defaultBrowserBehaviour.supportsSetSinkId();
     const genericName = 'Speaker';
     const additionalDevices: string[] = [];
-    this.populateDeviceList(
-      'audio-output',
-      genericName,
-      await this.audioVideo.listAudioOutputDevices(),
-      additionalDevices
-    );
+    const devices = supportsChoosing ? await this.audioVideo.listAudioOutputDevices() : [];
+    this.populateDeviceList('audio-output', genericName, devices, additionalDevices);
     this.populateInMeetingDeviceList(
       'dropdown-menu-speaker',
       genericName,
-      await this.audioVideo.listAudioOutputDevices(),
+      devices,
       additionalDevices,
       undefined,
       async (name: string) => {
+        if (!supportsChoosing) {
+          return;
+        }
         try {
-          await this.audioVideo.chooseAudioOutputDevice(name);
+          await this.chooseAudioOutputDevice(name);
         } catch (e) {
-          this.log('Failed to chooseAudioOutputDevice', e)
+          fatal(e);
+          this.log('Failed to chooseAudioOutputDevice', e);
         }
       }
     );
   }
 
-  private analyserNodeCallback = () => {};
+  private async chooseAudioOutputDevice(device: string): Promise<void> {
+    // Set it for the content share stream if we can.
+    const videoElem = document.getElementById('content-share-video') as HTMLVideoElement;
+    if (this.defaultBrowserBehaviour.supportsSetSinkId()) {
+      // @ts-ignore
+      videoElem.setSinkId(device);
+    }
+
+    await this.audioVideo.chooseAudioOutputDevice(device);
+  }
+
+  private analyserNodeCallback: undefined | (() => void);
 
   async selectedAudioInput(): Promise<AudioInputDevice> {
     const audioInput = document.getElementById('audio-input') as HTMLSelectElement;
@@ -1527,6 +2200,7 @@ export class DemoMeetingApp implements
     try {
       await this.audioVideo.chooseAudioInputDevice(device);
     } catch (e) {
+      fatal(e);
       this.log(`failed to choose audio input device ${device}`, e);
     }
     this.updateVoiceFocusDisplayState();
@@ -1567,7 +2241,7 @@ export class DemoMeetingApp implements
       return;
     }
 
-    this.analyserNodeCallback = () => {};
+    this.analyserNodeCallback = undefined;
 
     // Disconnect the analyser node from its inputs and outputs.
     this.analyserNode.disconnect();
@@ -1615,39 +2289,44 @@ export class DemoMeetingApp implements
         this.setAudioPreviewPercent(percent);
       }
       frameIndex = (frameIndex + 1) % 2;
-      requestAnimationFrame(this.analyserNodeCallback);
+      if (this.analyserNodeCallback) {
+        requestAnimationFrame(this.analyserNodeCallback);
+      }
     };
     requestAnimationFrame(this.analyserNodeCallback);
   }
 
   async openAudioOutputFromSelection(): Promise<void> {
-    const audioOutput = document.getElementById('audio-output') as HTMLSelectElement;
-    try {
-      await this.audioVideo.chooseAudioOutputDevice(audioOutput.value);
-    } catch (e) {
-      this.log('failed to chooseAudioOutputDevice', e);
+    if (this.defaultBrowserBehaviour.supportsSetSinkId()) {
+      try {
+        const audioOutput = document.getElementById('audio-output') as HTMLSelectElement;
+        await this.chooseAudioOutputDevice(audioOutput.value);
+      } catch (e) {
+        fatal(e);
+        this.log('failed to chooseAudioOutputDevice', e);
+      }
     }
     const audioMix = document.getElementById('meeting-audio') as HTMLAudioElement;
     try {
       await this.audioVideo.bindAudioElement(audioMix);
     } catch (e) {
+      fatal(e);
       this.log('failed to bindAudioElement', e);
     }
   }
 
   private selectedVideoInput: string | null = null;
-
   async openVideoInputFromSelection(selection: string | null, showPreview: boolean): Promise<void> {
     if (selection) {
       this.selectedVideoInput = selection;
     }
     this.log(`Switching to: ${this.selectedVideoInput}`);
-    const device = this.videoInputSelectionToDevice(this.selectedVideoInput);
+    const device = await this.videoInputSelectionToDevice(this.selectedVideoInput);
     if (device === null) {
       if (showPreview) {
-        this.audioVideo.stopVideoPreviewForVideoInput(document.getElementById(
-          'video-preview'
-        ) as HTMLVideoElement);
+        this.audioVideo.stopVideoPreviewForVideoInput(
+          document.getElementById('video-preview') as HTMLVideoElement
+        );
       }
       this.audioVideo.stopLocalVideoTile();
       this.toggleButton('button-camera', 'off');
@@ -1655,20 +2334,22 @@ export class DemoMeetingApp implements
       try {
         await this.audioVideo.chooseVideoInputDevice(device);
       } catch (e) {
+        fatal(e);
         this.log(`failed to chooseVideoInputDevice ${device}`, e);
       }
-      throw new Error('no video device selected');
+      this.log('no video device selected');
     }
     try {
       await this.audioVideo.chooseVideoInputDevice(device);
     } catch (e) {
+      fatal(e);
       this.log(`failed to chooseVideoInputDevice ${device}`, e);
     }
 
     if (showPreview) {
-      this.audioVideo.startVideoPreviewForVideoInput(document.getElementById(
-        'video-preview'
-      ) as HTMLVideoElement);
+      this.audioVideo.startVideoPreviewForVideoInput(
+        document.getElementById('video-preview') as HTMLVideoElement
+      );
     }
   }
 
@@ -1705,14 +2386,14 @@ export class DemoMeetingApp implements
 
     if (this.voiceFocusDevice) {
       // Dismantle the old one.
-      return this.voiceFocusDevice = await this.voiceFocusDevice.chooseNewInnerDevice(inner);
+      return (this.voiceFocusDevice = await this.voiceFocusDevice.chooseNewInnerDevice(inner));
     }
 
     try {
       const transformer = await this.getVoiceFocusDeviceTransformer();
       const vf: VoiceFocusTransformDevice = await transformer.createTransformDevice(inner);
       if (vf) {
-        return this.voiceFocusDevice = vf;
+        return (this.voiceFocusDevice = vf);
       }
     } catch (e) {
       // Fall through.
@@ -1720,9 +2401,9 @@ export class DemoMeetingApp implements
     return inner;
   }
 
-
-
-  private async audioInputSelectionWithOptionalVoiceFocus(device: Device): Promise<Device | VoiceFocusTransformDevice> {
+  private async audioInputSelectionWithOptionalVoiceFocus(
+    device: Device
+  ): Promise<Device | VoiceFocusTransformDevice> {
     if (this.isVoiceFocusEnabled()) {
       if (!this.voiceFocusDevice) {
         return this.createVoiceFocusDevice(device);
@@ -1733,22 +2414,20 @@ export class DemoMeetingApp implements
       // reselecting the same inner -- no need to modify the Web Audio graph.
       // Allowing the Voice Focus device to manage toggling Voice Focus on and off
       // also
-      return this.voiceFocusDevice = await this.voiceFocusDevice.chooseNewInnerDevice(device);
+      return (this.voiceFocusDevice = await this.voiceFocusDevice.chooseNewInnerDevice(device));
     }
 
     return device;
   }
 
-  private async audioInputSelectionToDevice(value: string): Promise<Device | VoiceFocusTransformDevice> {
+  private async audioInputSelectionToDevice(
+    value: string
+  ): Promise<Device | VoiceFocusTransformDevice> {
     const inner = await this.audioInputSelectionToIntrinsicDevice(value);
     return this.audioInputSelectionWithOptionalVoiceFocus(inner);
   }
 
-  private videoInputSelectionToDevice(value: string): VideoInputDevice {
-    if (this.isRecorder() || this.isBroadcaster()) {
-      return null;
-    }
-
+  private videoInputSelectionToIntrinsicDevice(value: string): Device {
     if (value === 'Blue') {
       return DefaultDeviceController.synthesizeVideoDevice('blue');
     }
@@ -1757,22 +2436,85 @@ export class DemoMeetingApp implements
       return DefaultDeviceController.synthesizeVideoDevice('smpte');
     }
 
-    if (value === 'None') {
-      return null;
+    return value;
+  }
+
+  private videoFilterToProcessor(videoFilter: VideoFilterName): VideoFrameProcessor | null {
+    this.log(`Choosing video filter ${videoFilter}`);
+
+    if (videoFilter === 'Emojify') {
+      return new EmojifyVideoFrameProcessor('🚀');
     }
 
-    return value;
+    if (videoFilter === 'CircularCut') {
+      return new CircularCut();
+    }
+
+    if (videoFilter === 'NoOp') {
+      return new NoOpVideoFrameProcessor();
+    }
+
+    if (videoFilter === 'Segmentation') {
+      return new SegmentationProcessor();
+    }
+
+    return null;
+  }
+
+  private async videoInputSelectionWithOptionalFilter(
+    innerDevice: Device
+  ): Promise<VideoInputDevice> {
+    if (this.selectedVideoFilterItem === 'None') {
+      return innerDevice;
+    }
+
+    if (
+      this.chosenVideoTransformDevice &&
+      this.selectedVideoFilterItem === this.chosenVideoFilter
+    ) {
+      if (this.chosenVideoTransformDevice.getInnerDevice() !== innerDevice) {
+        // switching device
+        this.chosenVideoTransformDevice = this.chosenVideoTransformDevice.chooseNewInnerDevice(
+          innerDevice
+        );
+      }
+      return this.chosenVideoTransformDevice;
+    }
+
+    // A different processor is selected then we need to discard old one and recreate
+    if (this.chosenVideoTransformDevice) {
+      await this.chosenVideoTransformDevice.stop();
+    }
+
+    const proc = this.videoFilterToProcessor(this.selectedVideoFilterItem);
+    this.chosenVideoFilter = this.selectedVideoFilterItem;
+    this.chosenVideoTransformDevice = new DefaultVideoTransformDevice(
+      this.meetingLogger,
+      innerDevice,
+      [proc]
+    );
+    return this.chosenVideoTransformDevice;
+  }
+
+  private async videoInputSelectionToDevice(value: string): Promise<VideoInputDevice> {
+    if (this.isRecorder() || this.isBroadcaster() || value === 'None') {
+      return null;
+    }
+    const intrinsicDevice = this.videoInputSelectionToIntrinsicDevice(value);
+    return await this.videoInputSelectionWithOptionalFilter(intrinsicDevice);
   }
 
   private initContentShareDropDownItems(): void {
     let item = document.getElementById('dropdown-item-content-share-screen-capture');
     item.addEventListener('click', () => {
-      this.contentShareTypeChanged(ContentShareType.ScreenCapture);
+      this.contentShareType = ContentShareType.ScreenCapture;
+      this.contentShareStart();
     });
 
     item = document.getElementById('dropdown-item-content-share-screen-test-video');
     item.addEventListener('click', () => {
-      this.contentShareTypeChanged(ContentShareType.VideoFile, DemoMeetingApp.testVideo);
+      this.contentShareType = ContentShareType.VideoFile;
+      this.contentShareStart(DemoMeetingApp.testVideo);
     });
 
     document.getElementById('content-share-item').addEventListener('change', () => {
@@ -1784,50 +2526,68 @@ export class DemoMeetingApp implements
       }
       const url = URL.createObjectURL(file);
       this.log(`content share selected: ${url}`);
-      this.contentShareTypeChanged(ContentShareType.VideoFile, url);
+      this.contentShareType = ContentShareType.VideoFile;
+      this.contentShareStart(url);
       fileList.value = '';
+      (document.getElementById('dropdown-item-content-share-file-item') as HTMLDivElement).click();
+    });
+
+    document.getElementById('dropdown-item-content-share-stop').addEventListener('click', () => {
+      this.contentShareStop();
     });
   }
 
-  private async contentShareTypeChanged(contentShareType: ContentShareType, videoUrl?: string): Promise<void> {
-    if (this.isButtonOn('button-content-share')) {
-      await this.contentShareStop();
+  private async playToStream(videoFile: HTMLVideoElement): Promise<MediaStream> {
+    await videoFile.play();
+
+    if (this.defaultBrowserBehaviour.hasFirefoxWebRTC()) {
+      // @ts-ignore
+      return videoFile.mozCaptureStream();
     }
-    this.contentShareType = contentShareType;
-    await this.contentShareStart(videoUrl);
+
+    // @ts-ignore
+    return videoFile.captureStream();
   }
 
   private async contentShareStart(videoUrl?: string): Promise<void> {
-    this.toggleButton('button-content-share');
     switch (this.contentShareType) {
-      case ContentShareType.ScreenCapture:
-        this.audioVideo.startContentShareFromScreenCapture();
+      case ContentShareType.ScreenCapture: {
+        try {
+          await this.audioVideo.startContentShareFromScreenCapture();
+        } catch (e) {
+          this.meetingLogger?.error(`Could not start content share: ${e}`);
+          return;
+        }
         break;
-      case ContentShareType.VideoFile:
+      }
+      case ContentShareType.VideoFile: {
         const videoFile = document.getElementById('content-share-video') as HTMLVideoElement;
         if (videoUrl) {
           videoFile.src = videoUrl;
         }
-        await videoFile.play();
-        let mediaStream: MediaStream;
-        if(this.defaultBrowserBehaviour.hasFirefoxWebRTC()) {
-          // @ts-ignore
-          mediaStream = videoFile.mozCaptureStream();
-        } else {
-          // @ts-ignore
-          mediaStream = videoFile.captureStream();
+
+        const mediaStream = await this.playToStream(videoFile);
+        try {
+          // getDisplayMedia can throw.
+          await this.audioVideo.startContentShare(mediaStream);
+        } catch (e) {
+          this.meetingLogger?.error(`Could not start content share: ${e}`);
+          return;
         }
-        this.audioVideo.startContentShare(mediaStream);
         break;
+      }
     }
+
+    this.toggleButton('button-content-share', 'on');
+    this.updateContentShareDropdown(true);
   }
 
   private async contentShareStop(): Promise<void> {
-    if (this.isButtonOn('button-pause-content-share')) {
-      this.toggleButton('button-pause-content-share');
-    }
-    this.toggleButton('button-content-share');
     this.audioVideo.stopContentShare();
+    this.toggleButton('button-pause-content-share', 'off');
+    this.toggleButton('button-content-share', 'off');
+    this.updateContentShareDropdown(false);
+
     if (this.contentShareType === ContentShareType.VideoFile) {
       const videoFile = document.getElementById('content-share-video') as HTMLVideoElement;
       videoFile.pause();
@@ -1835,16 +2595,27 @@ export class DemoMeetingApp implements
     }
   }
 
+  private updateContentShareDropdown(enabled: boolean): void {
+    document.getElementById('dropdown-item-content-share-screen-capture').style.display = enabled ? 'none' : 'block';
+    document.getElementById('dropdown-item-content-share-screen-test-video').style.display = enabled ? 'none' : 'block';
+    document.getElementById('dropdown-item-content-share-file-item').style.display = enabled ? 'none' : 'block';
+    document.getElementById('dropdown-item-content-share-stop').style.display = enabled ? 'block' : 'none';
+  }
+
   isRecorder(): boolean {
-    return (new URL(window.location.href).searchParams.get('record')) === 'true';
+    return new URL(window.location.href).searchParams.get('record') === 'true';
   }
 
   isBroadcaster(): boolean {
-    return (new URL(window.location.href).searchParams.get('broadcast')) === 'true';
+    return new URL(window.location.href).searchParams.get('broadcast') === 'true';
+  }
+
+  isAbortingOnReconnect(): boolean {
+    return new URL(window.location.href).searchParams.get('abort-on-reconnect') === 'true';
   }
 
   async authenticate(): Promise<string> {
-    let joinInfo = (await this.joinMeeting()).JoinInfo;
+    const joinInfo = (await this.joinMeeting()).JoinInfo;
     const configuration = new MeetingSessionConfiguration(joinInfo.Meeting, joinInfo.Attendee);
     await this.initializeMeetingSession(configuration);
     const url = new URL(window.location.href);
@@ -1853,12 +2624,16 @@ export class DemoMeetingApp implements
     return configuration.meetingId;
   }
 
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   log(str: string, ...args: any[]): void {
     console.log.apply(console, [`[DEMO] ${str}`, ...args]);
   }
 
   audioVideoDidStartConnecting(reconnecting: boolean): void {
     this.log(`session connecting. reconnecting: ${reconnecting}`);
+    if (reconnecting && this.isAbortingOnReconnect()) {
+        fatal(Error('reconnect occured with abort-on-reconnect set to true'));
+    }
   }
 
   audioVideoDidStart(): void {
@@ -1867,18 +2642,158 @@ export class DemoMeetingApp implements
 
   audioVideoDidStop(sessionStatus: MeetingSessionStatus): void {
     this.log(`session stopped from ${JSON.stringify(sessionStatus)}`);
-    this.log(`resetting stats in WebRTCStatsCollector`);
-    this.statsCollector.resetStats();
+    this.log(`resetting stats`);
+    this.resetStats();
+
+    const returnToStart = () => {
+      switch (this.behaviorAfterLeave) {
+        case 'spa':
+          this.switchToFlow('flow-authenticate');
+          break;
+        case 'reload':
+          window.location.href = window.location.pathname;
+          break;
+        // This is useful for testing memory leaks.
+        case 'halt': {
+          // Wait a moment to make sure cleanup is done.
+          setTimeout(() => {
+            // Kill all references to code and content.
+            // @ts-ignore
+            window.app = undefined;
+            // @ts-ignore
+            window.app_meetingV2 = undefined;
+            // @ts-ignore
+            window.webpackHotUpdateapp_meetingV2 = undefined;
+            document.getElementsByTagName('body')[0].innerHTML = '<b>Gone</b>';
+            this.removeFatalHandlers();
+          }, 2000);
+          break;
+        }
+      }
+    };
+
+    /**
+     * This is approximately the inverse of the initialization method above.
+     * This work only needs to be done if you want to continue using the page; if
+     * your app navigates away or closes the tab when done, you can let the browser
+     * clean up.
+     */
+    const cleanUpResources = async () => {
+      // Clean up the timers for this.
+      this.audioVideo.unsubscribeFromActiveSpeakerDetector(this.activeSpeakerHandler);
+
+      // Stop listening to attendee presence.
+      this.audioVideo.realtimeUnsubscribeToAttendeeIdPresence(this.attendeeIdPresenceHandler);
+
+      // Stop watching device changes in the UI.
+      this.audioVideo.removeDeviceChangeObserver(this);
+
+      // Stop content share and local video.
+      await this.audioVideo.stopLocalVideoTile();
+      await this.audioVideo.stopContentShare();
+
+      // Drop the audio output.
+      await this.audioVideo.chooseAudioOutputDevice(null);
+      this.audioVideo.unbindAudioElement();
+
+      // Stop any video processor.
+      await this.chosenVideoTransformDevice?.stop();
+
+      // Stop Voice Focus.
+      await this.voiceFocusDevice?.stop();
+
+      // If you joined and left the meeting, `CleanStoppedSessionTask` will have deselected
+      // any input streams. If you didn't, you need to call `chooseAudioInputDevice` here.
+
+      // Clean up the loggers so they don't keep their `onload` listeners around.
+      setTimeout(async () => {
+        await this.meetingEventPOSTLogger?.destroy();
+        await this.meetingSessionPOSTLogger?.destroy();
+      }, 500);
+
+      if (isDestroyable(this.eventReporter)) {
+        this.eventReporter?.destroy();
+      }
+
+      this.audioVideo = undefined;
+      this.voiceFocusDevice = undefined;
+      this.meetingSession = undefined;
+      this.activeSpeakerHandler = undefined;
+      this.currentAudioInputDevice = undefined;
+      this.eventReporter = undefined;
+    };
+
+    const onLeftMeeting = async () => {
+      await cleanUpResources();
+      returnToStart();
+    };
+
     if (sessionStatus.statusCode() === MeetingSessionStatusCode.AudioCallEnded) {
       this.log(`meeting ended`);
-      // @ts-ignore
-      window.location = window.location.pathname;
-    } else if (sessionStatus.statusCode() === MeetingSessionStatusCode.Left) {
-      this.log('left meeting');
-
-      // @ts-ignore
-      window.location = window.location.pathname;
+      onLeftMeeting();
+      return;
     }
+
+    if (sessionStatus.statusCode() === MeetingSessionStatusCode.Left) {
+      this.log('left meeting');
+      onLeftMeeting();
+      return;
+    }
+  }
+
+  createPauseResumeListener(tileState: VideoTileState): (event: Event) => void {
+      return (event: Event): void => {
+        if (!tileState.paused) {
+            this.audioVideo.pauseVideoTile(tileState.tileId);
+            (event.target as HTMLButtonElement).innerText = 'Resume';
+          } else {
+            this.audioVideo.unpauseVideoTile(tileState.tileId);
+            (event.target as HTMLButtonElement).innerText = 'Pause';
+          }
+        }
+  }
+
+  createPinUnpinListener(tileState: VideoTileState): (event: Event) => void {
+    return (event: Event): void => {
+      const attendeeId = tileState.boundAttendeeId;
+        if (this.roster[attendeeId].pinned ) {
+          (event.target as HTMLButtonElement).innerText = 'Pin';
+          this.roster[attendeeId].pinned = false;
+        } else {
+          (event.target as HTMLButtonElement).innerText = 'Unpin';
+          this.roster[attendeeId].pinned = true;
+        }
+        this.updateDownlinkPreference();
+      }
+  }
+
+  updateDownlinkPreference(): void {
+    const videoPreferences = VideoPreferences.prepare();
+    for (const attendeeId in this.roster) {
+      if (this.roster[attendeeId].hasVideo) {
+        if (this.roster[attendeeId].pinned) {
+          videoPreferences.add(new VideoPreference(attendeeId, 1, TargetDisplaySize.High));
+          this.log(`Pinned video: bwe: new preferences: ${JSON.stringify(videoPreferences)}`);
+        }
+        else {
+          videoPreferences.add(new VideoPreference(attendeeId, 2, TargetDisplaySize.Low));
+          this.log(`Unpinned: bwe: new preferences: ${JSON.stringify(videoPreferences)}`);
+        }
+      }
+    }
+    this.priorityBasedDownlinkPolicy.chooseRemoteVideoSources(videoPreferences.build());
+  }
+
+  isContentTile(tileIndex: number): boolean {
+    const tileId = this.tileIndexToTileId[tileIndex];
+    if (!tileId) {
+      return false;
+    }
+    const tile = this.audioVideo.getVideoTile(tileId);
+    if (!tile) {
+      return false;
+    }
+    return tile.state().isContent;
   }
 
   videoTileDidUpdate(tileState: VideoTileState): void {
@@ -1892,25 +2807,36 @@ export class DemoMeetingApp implements
     const tileElement = document.getElementById(`tile-${tileIndex}`) as HTMLDivElement;
     const videoElement = document.getElementById(`video-${tileIndex}`) as HTMLVideoElement;
     const nameplateElement = document.getElementById(`nameplate-${tileIndex}`) as HTMLDivElement;
+    const pauseStateElement = document.getElementById(`pause-state-${tileIndex}`) as HTMLDivElement;
     const attendeeIdElement = document.getElementById(`attendeeid-${tileIndex}`) as HTMLDivElement;
-    const pauseButtonElement = document.getElementById(`video-pause-${tileIndex}`) as HTMLButtonElement;
+    const pauseButtonElement = document.getElementById(
+      `video-pause-${tileIndex}`
+    ) as HTMLButtonElement;
+    const pinButtonElement = document.getElementById(
+      `video-pin-${tileIndex}`
+    ) as HTMLButtonElement;
 
-    pauseButtonElement.addEventListener('click', () => {
-      if (!tileState.paused) {
-        this.audioVideo.pauseVideoTile(tileState.tileId);
-        pauseButtonElement.innerText = 'Resume';
-      } else {
-        this.audioVideo.unpauseVideoTile(tileState.tileId);
-        pauseButtonElement.innerText = 'Pause';
-      }
-    });
 
+    pauseButtonElement.removeEventListener('click', this.tileIndexToPauseEventListener[tileIndex]);
+    this.tileIndexToPauseEventListener[tileIndex] = this.createPauseResumeListener(tileState);
+    pauseButtonElement.addEventListener('click', this.tileIndexToPauseEventListener[tileIndex]);
+    if (this.usePriorityBasedDownlinkPolicy) {
+      this.log('pinButtonElement addEventListener for tileIndex ' + tileIndex);
+      pinButtonElement.removeEventListener('click', this.tileIndexToPinEventListener[tileIndex]);
+      this.tileIndexToPinEventListener[tileIndex] = this.createPinUnpinListener(tileState);
+      pinButtonElement.addEventListener('click', this.tileIndexToPinEventListener[tileIndex]);
+    }
     this.log(`binding video tile ${tileState.tileId} to ${videoElement.id}`);
     this.audioVideo.bindVideoElement(tileState.tileId, videoElement);
     this.tileIndexToTileId[tileIndex] = tileState.tileId;
     this.tileIdToTileIndex[tileState.tileId] = tileIndex;
     this.updateProperty(nameplateElement, 'innerText', tileState.boundExternalUserId.split('#')[1]);
     this.updateProperty(attendeeIdElement, 'innerText', tileState.boundAttendeeId);
+    if (tileState.paused && this.roster[tileState.boundAttendeeId].bandwidthConstrained) {
+      this.updateProperty(pauseStateElement, 'innerText', '⚡');
+    } else {
+      this.updateProperty(pauseStateElement, 'innerText', '');
+    }
     this.showTile(tileElement, tileState);
     this.updateGridClasses();
     this.layoutFeaturedTile();
@@ -1919,6 +2845,10 @@ export class DemoMeetingApp implements
   videoTileWasRemoved(tileId: number): void {
     const tileIndex = this.tileOrganizer.releaseTileIndex(tileId);
     this.log(`video tileId removed: ${tileId} from tile-${tileIndex}`);
+    if (this.usePriorityBasedDownlinkPolicy) {
+      const pinButtonElement = document.getElementById(`video-pin-${tileIndex}`) as HTMLButtonElement;
+      pinButtonElement.removeEventListener('click', this.tileIndexToPinEventListener[tileIndex]);
+    }
     this.hideTile(tileIndex);
     this.updateGridClasses();
   }
@@ -1928,7 +2858,7 @@ export class DemoMeetingApp implements
     this.log(`video availability changed: canStartLocalVideo  ${availability.canStartLocalVideo}`);
   }
 
-  showTile(tileElement: HTMLDivElement, tileState: VideoTileState) {
+  showTile(tileElement: HTMLDivElement, tileState: VideoTileState): void {
     tileElement.classList.add(`active`);
 
     if (tileState.isContent) {
@@ -1997,26 +2927,29 @@ export class DemoMeetingApp implements
     this.updateGridClasses();
   }
 
-  updateGridClasses() {
+  updateGridClasses(): void {
     const localTileId = this.localTileId();
     const activeTile = this.activeTileId();
 
     this.tileArea.className = `v-grid size-${this.availablelTileSize()}`;
 
     if (activeTile && activeTile !== localTileId) {
-      this.tileArea.classList.add('featured')
+      this.tileArea.classList.add('featured');
     } else {
       this.tileArea.classList.remove('featured');
     }
   }
 
   availablelTileSize(): number {
-    return this.tileOrganizer.remoteTileCount +
-    (this.audioVideo.hasStartedLocalVideoTile() ? 1 : 0);
+    return (
+      this.tileOrganizer.remoteTileCount + (this.audioVideo.hasStartedLocalVideoTile() ? 1 : 0)
+    );
   }
 
   localTileId(): number | null {
-    return this.audioVideo.hasStartedLocalVideoTile() ? this.audioVideo.getLocalVideoTile().state().tileId : null;
+    return this.audioVideo.hasStartedLocalVideoTile()
+      ? this.audioVideo.getLocalVideoTile().state().tileId
+      : null;
   }
 
   visibleTileIndices(): number[] {
@@ -2032,7 +2965,9 @@ export class DemoMeetingApp implements
         if (videoElem.videoHeight > videoElem.videoWidth) {
           // portrait mode
           videoElem.style.objectFit = 'contain';
-          this.log(`video-${i} changed to portrait mode resolution ${videoElem.videoWidth}x${videoElem.videoHeight}`);
+          this.log(
+            `video-${i} changed to portrait mode resolution ${videoElem.videoWidth}x${videoElem.videoHeight}`
+          );
         } else {
           videoElem.style.objectFit = 'cover';
         }
@@ -2041,7 +2976,7 @@ export class DemoMeetingApp implements
   }
 
   allowMaxContentShare(): boolean {
-    const allowed = (new URL(window.location.href).searchParams.get('max-content-share')) === 'true';
+    const allowed = new URL(window.location.href).searchParams.get('max-content-share') === 'true';
     if (allowed) {
       return true;
     }
@@ -2074,6 +3009,7 @@ export class DemoMeetingApp implements
       this.buttonStates['button-content-share'] = false;
       this.buttonStates['button-pause-content-share'] = false;
       this.displayButtonStates();
+      this.updateContentShareDropdown(false);
     }
   }
 
@@ -2086,11 +3022,42 @@ export class DemoMeetingApp implements
   }
 
   encodingSimulcastLayersDidChange(simulcastLayers: SimulcastLayers): void {
-    this.log(`current active simulcast layers changed to: ${SimulcastLayerMapping[simulcastLayers]}`);
+    this.log(
+      `current active simulcast layers changed to: ${SimulcastLayerMapping[simulcastLayers]}`
+    );
   }
 
-  remoteVideoSourcesDidChange(videoSources: VideoSource[]) {
+  remoteVideoSourcesDidChange(videoSources: VideoSource[]): void {
     this.log(`available remote video sources changed: ${JSON.stringify(videoSources)}`);
+    if (!this.usePriorityBasedDownlinkPolicy) {
+      return;
+    }
+    for (const attendeeId in this.roster) {
+      this.roster[attendeeId].hasVideo = false;
+    }
+    for (const source of videoSources) {
+      if (!(this.roster.hasOwnProperty(source.attendee.attendeeId))) {
+        this.roster[source.attendee.attendeeId] = {
+          hasVideo: true
+        };
+      }
+      else {
+        this.roster[source.attendee.attendeeId].hasVideo = true;
+      }
+    }
+    this.updateDownlinkPreference();
+  }
+
+  tileWillBePausedByDownlinkPolicy(tileId: number): void {
+    this.log(`Tile ${tileId} will be paused due to insufficient bandwidth`);
+    const attendeeId = this.audioVideo.getVideoTile(tileId)?.state().boundAttendeeId;
+    this.roster[attendeeId].bandwidthConstrained = true;
+  }
+
+  tileWillBeUnpausedByDownlinkPolicy(tileId: number): void {
+    this.log(`Tile ${tileId} will be resumed due to sufficient bandwidth`);
+    const attendeeId = this.audioVideo.getVideoTile(tileId)?.state().boundAttendeeId;
+    this.roster[attendeeId].bandwidthConstrained = false;
   }
 }
 

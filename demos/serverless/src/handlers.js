@@ -1,9 +1,10 @@
 // Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-const AWS = require('./aws-sdk');
+const AWS = require('aws-sdk');
 const fs = require('fs');
-const { v4: uuidv4 } = require('./uuid');
+const { v4: uuidv4 } = require('uuid');
+const { metricScope } = require('aws-embedded-metrics');
 
 // Store meetings in a DynamoDB table so attendees can join by meeting title
 const ddb = new AWS.DynamoDB();
@@ -22,7 +23,10 @@ const {
   BROWSER_LOG_GROUP_NAME,
   BROWSER_MEETING_EVENT_LOG_GROUP_NAME,
   SQS_QUEUE_ARN,
-  USE_EVENT_BRIDGE
+  USE_EVENT_BRIDGE,
+  BROWSER_EVENT_INGESTION_LOG_GROUP_NAME,
+  CAPTURE_S3_DESTINATION_PREFIX,
+  AWS_ACCOUNT_ID,
 } = process.env;
 
 // === Handlers ===
@@ -101,6 +105,36 @@ exports.end = async (event, context) => {
   return response(200, 'application/json', JSON.stringify({}));
 };
 
+exports.start_capture = async (event, context) => {
+  // Fetch the meeting by title
+  const meeting = await getMeeting(event.queryStringParameters.title);
+  meetingRegion = meeting.Meeting.MediaRegion;
+
+  let captureS3Destination = `arn:aws:s3:::${CAPTURE_S3_DESTINATION_PREFIX}-${meetingRegion}/${meeting.Meeting.MeetingId}/`
+  pipelineInfo = await chime.createMediaCapturePipeline({
+    SourceType: "ChimeSdkMeeting",
+    SourceArn: `arn:aws:chime::${AWS_ACCOUNT_ID}:meeting:${meeting.Meeting.MeetingId}`,
+    SinkType: "S3Bucket",
+    SinkArn: captureS3Destination,
+  }).promise();
+  await putCapturePipeline(event.queryStringParameters.title, pipelineInfo)
+
+  response(response, 201, 'application/json', JSON.stringify(pipelineInfo));
+};
+
+exports.end_capture = async (event, context) => {
+  // Fetch the capture info by title
+  const pipelineInfo = await getCapturePipeline(event.queryStringParameters.title);
+  if (pipelineInfo) {
+    await chime.deleteMediaCapturePipeline({
+      MediaPipelineId: pipelineInfo.MediaCapturePipeline.MediaPipelineId
+    }).promise();
+    response(response, 200, 'application/json', JSON.stringify({}));
+  } else {
+    response(response, 500, 'application/json', JSON.stringify({msg: "No pipeline to stop for this meeting"}))
+  }
+};
+
 exports.fetch_credentials = async (event, context) => {
   const awsCredentials = {
     accessKeyId: AWS.config.credentials.accessKeyId,
@@ -139,6 +173,23 @@ exports.log_meeting_event = async (event, context) => {
         message: log.message,
         timestamp: log.timestampMs
       });
+      addSignalMetricsToCloudWatch(log.message, meetingId, attendeeId);
+    }
+    return logEvents;
+  });
+};
+
+exports.log_event_ingestion = async (event, context) => {
+  return putLogEvents(event, BROWSER_EVENT_INGESTION_LOG_GROUP_NAME, (logs, meetingId, attendeeId) => {
+    const logEvents = [];
+    for (let i = 0; i < logs.length; i++) {
+      const log = logs[i];
+      const message = `[${log.logLevel}] [meeting: ${meetingId}] [attendee: ${attendeeId}]: ${log.message}`;
+      logEvents.push({
+        message,
+        timestamp: log.timestampMs
+      });
+      addEventIngestionMetricsToCloudWatch(log, meetingId, attendeeId);
     }
     return logEvents;
   });
@@ -162,6 +213,10 @@ exports.create_log_stream = async event => {
 
 exports.create_browser_event_log_stream = async event => {
   return createLogStream(event, BROWSER_MEETING_EVENT_LOG_GROUP_NAME);
+}
+
+exports.create_browser_event_ingestion_log_stream = async event => {
+  return createLogStream(event, BROWSER_EVENT_INGESTION_LOG_GROUP_NAME);
 }
 
 // === Helpers ===
@@ -191,6 +246,33 @@ async function putMeeting(title, meeting) {
       }
     }
   }).promise();
+}
+
+// Retrieves capture data for a meeting by title
+async function getCapturePipeline(title) {
+  const result = await ddb.getItem({
+    TableName: MEETINGS_TABLE_NAME,
+    Key: {
+      'Title': {
+        S: title
+      }
+    }
+  }).promise();
+  return result.Item && result.Item.CaptureData ? JSON.parse(result.Item.CaptureData.S) : null;
+}
+
+// Adds meeting capture data to the meeting table
+async function putCapturePipeline(title, capture) {
+  await ddb.updateItem({
+    TableName: MEETINGS_TABLE_NAME,
+    Key: {
+      'Title': { S: title }
+    },
+    UpdateExpression: "SET CaptureData = :capture",
+    ExpressionAttributeValues: {
+      ":capture": { S: JSON.stringify(capture) }
+    }
+  }).promise()
 }
 
 async function putLogEvents(event, logGroupName, createLogEvents) {
@@ -271,4 +353,46 @@ function response(statusCode, contentType, body) {
     body: body,
     isBase64Encoded: false
   };
+}
+
+function addSignalMetricsToCloudWatch(logMsg, meetingId, attendeeId) {
+  const logMsgJson = JSON.parse(logMsg);
+  const metricList = ['signalingOpenDurationMs', 'iceGatheringDurationMs', 'attendeePresenceDurationMs', 'meetingStartDurationMs'];
+  const putMetric =
+    metricScope(metrics => (metricName, metricValue, meetingId, attendeeId) => {
+      metrics.setProperty('MeetingId', meetingId);
+      metrics.setProperty('AttendeeId', attendeeId);
+      metrics.putMetric(metricName, metricValue);
+    });
+  for (let metricIndex = 0; metricIndex <= metricList.length; metricIndex += 1) {
+    const metricName = metricList[metricIndex];
+    if (logMsgJson.attributes.hasOwnProperty(metricName)) {
+      const metricValue = logMsgJson.attributes[metricName];
+      console.log('Logging metric -> ', metricName, ': ', metricValue );
+      putMetric(metricName, metricValue, meetingId, attendeeId);
+    }
+  }
+}
+
+function addEventIngestionMetricsToCloudWatch(log, meetingId, attendeeId) {
+  const putMetric =
+    metricScope(metrics => (metricName, metricValue, meetingId, attendeeId) => {
+      metrics.setProperty('MeetingId', meetingId);
+      metrics.setProperty('AttendeeId', attendeeId);
+      metrics.putMetric(metricName, metricValue);
+    });
+  const { logLevel, message } = log;
+  let errorMetricValue = 0;
+  let retryMetricValue = 0;
+  let ingestionTriggerSuccessMetricValue = 0;
+  if (logLevel === 'ERROR') {
+    errorMetricValue = 1;
+  } else if (logLevel === 'WARN' && message.match(/Retry (count)? limit reached/g)) {
+    retryMetricValue = 1;
+  } else if (message.includes('send successful')) {
+    ingestionTriggerSuccessMetricValue = 1;
+  }
+  putMetric('EventIngestionTriggerSuccess', ingestionTriggerSuccessMetricValue, meetingId, attendeeId);
+  putMetric('EventIngestionError', errorMetricValue, meetingId, attendeeId);
+  putMetric('EventIngestionRetryCountLimitReached', retryMetricValue, meetingId, attendeeId);
 }

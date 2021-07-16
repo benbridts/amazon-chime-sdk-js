@@ -50,6 +50,7 @@ export default class MeetingSessionStatus {
       case MeetingSessionStatusCode.SignalingRequestFailed:
       case MeetingSessionStatusCode.VideoCallAtSourceCapacity:
       case MeetingSessionStatusCode.RealtimeApiFailed:
+      case MeetingSessionStatusCode.AudioAttendeeRemoved:
         return true;
       default:
         return false;
@@ -71,6 +72,65 @@ export default class MeetingSessionStatus {
         return true;
       default:
         return false;
+    }
+  }
+
+  toString?(): string {
+    switch (this._statusCode) {
+      case MeetingSessionStatusCode.OK:
+        return 'Everything is OK so far.';
+      case MeetingSessionStatusCode.Left:
+        return 'The attendee left the meeting.';
+      case MeetingSessionStatusCode.AudioJoinedFromAnotherDevice:
+        return 'The attendee joined from another device.';
+      case MeetingSessionStatusCode.AudioDisconnectAudio:
+        return 'The audio connection failed.';
+      case MeetingSessionStatusCode.AudioAuthenticationRejected:
+        return 'The meeting rejected the attendee.';
+      case MeetingSessionStatusCode.AudioCallAtCapacity:
+        return "The attendee couldn't join because the meeting was at capacity.";
+      case MeetingSessionStatusCode.AudioCallEnded:
+      case MeetingSessionStatusCode.TURNMeetingEnded:
+      case MeetingSessionStatusCode.MeetingEnded:
+        return 'The meeting ended.';
+      case MeetingSessionStatusCode.AudioInternalServerError:
+      case MeetingSessionStatusCode.AudioServiceUnavailable:
+      case MeetingSessionStatusCode.AudioDisconnected:
+        return 'The audio connection failed.';
+      case MeetingSessionStatusCode.VideoCallSwitchToViewOnly:
+        return "The attendee couldn't start the local video because the maximum video capacity was reached.";
+      case MeetingSessionStatusCode.VideoCallAtSourceCapacity:
+        return 'The connection failed due to an internal server error.';
+      case MeetingSessionStatusCode.SignalingBadRequest:
+      case MeetingSessionStatusCode.SignalingInternalServerError:
+      case MeetingSessionStatusCode.SignalingRequestFailed:
+        return 'The signaling connection failed.';
+      case MeetingSessionStatusCode.StateMachineTransitionFailed:
+        return 'The state transition failed.';
+      case MeetingSessionStatusCode.ICEGatheringTimeoutWorkaround:
+        return 'Gathering ICE candidates timed out. In Chrome, this might indicate that the browser is in a bad state after reconnecting to VPN.';
+      case MeetingSessionStatusCode.ConnectionHealthReconnect:
+        return 'The meeting was reconnected.';
+      case MeetingSessionStatusCode.RealtimeApiFailed:
+        return 'The real-time API failed. This status code might indicate that the callback you passed to the real-time API threw an exception.';
+      case MeetingSessionStatusCode.TaskFailed:
+        return 'The connection failed. See the error message for more details.';
+      case MeetingSessionStatusCode.AudioDeviceSwitched:
+        return 'The attendee chose another audio device.';
+      case MeetingSessionStatusCode.IncompatibleSDP:
+        return 'The connection failed due to incompatible SDP.';
+      case MeetingSessionStatusCode.TURNCredentialsForbidden:
+        return 'The meeting ended, or the attendee was removed.';
+      case MeetingSessionStatusCode.NoAttendeePresent:
+        return 'The attendee was not present.';
+      case MeetingSessionStatusCode.AudioAttendeeRemoved:
+        return 'The meeting ended because attendee removed.';
+      /* istanbul ignore next */
+      default: {
+        // You get a compile-time error if you do not handle any status code.
+        const exhaustiveCheck: never = this._statusCode;
+        throw new Error(`Unhandled case: ${exhaustiveCheck}`);
+      }
     }
   }
 
@@ -101,6 +161,8 @@ export default class MeetingSessionStatus {
         return new MeetingSessionStatus(MeetingSessionStatusCode.AudioCallAtCapacity);
       case 410:
         return new MeetingSessionStatus(MeetingSessionStatusCode.MeetingEnded);
+      case 411:
+        return new MeetingSessionStatus(MeetingSessionStatusCode.AudioAttendeeRemoved);
       case 500:
         return new MeetingSessionStatus(MeetingSessionStatusCode.AudioInternalServerError);
       case 503:

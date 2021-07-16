@@ -5,6 +5,374 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- Added `VideoPriorityBasedPolicyConfig` to control video downlink policy with network event response and recovery delays. Check [User Guide for Priority-based Downlink Policy](https://aws.github.io/amazon-chime-sdk-js/modules/prioritybased_downlink_policy.html#user-guide-for-priority-based-downlink-policy) for more information.
+- Amazon Chime SDK Project Board Overview and Guide.
+
+### Changed
+
+### Removed
+
+### Fixed
+- Improve the meeting event guide.
+- Fixed Project Board guide with correct community template link.
+
+## [2.13.0] - 2021-06-29
+
+### Added
+
+### Changed
+
+### Removed
+
+### Fixed
+- Improve the meeting event guide
+
+## [2.13.0] - 2021-06-29
+
+### Added
+
+- Add events ingestion to report meeting events to Amazon Chime backend.
+  Check [Client Event Ingestion guide](https://aws.github.io/amazon-chime-sdk-js/modules/clientevent_ingestion.html) for more information.
+- Add `videoUpstreamPacketLossPercent` and `videoDownstreamPacketsReceived` metrics for video streams
+- [Documentation] Add documentation for view-only mode.
+- Use SESSION_ESTABLISH event to indicate success of Chime SDK for Messaging successful websocket connection
+
+### Changed
+
+### Removed
+
+### Fixed
+
+## [2.12.0] - 2021-06-23
+
+### Added
+
+- [Documentation] Add documentation for `getObservableVideoMetrics`.
+- [Documentation] Update FAQ and public documentation to add more information on SignalingBadRequest related error codes.
+- [Documentation] Rephrase the terms in the status code documentations.
+
+### Changed
+
+- Bump maxVideos limit to 25
+
+### Removed
+
+### Fixed
+
+- Pre-started signaling connections no longer cause a delay in joining if the
+  user takes more than a minute to join the meeting.
+- Fix choosing input device API when passing in a media stream.
+
+## [2.11.0] - 2021-06-04
+
+### Added
+
+- Bind tileController during the initialization of DefaultAudioVideoController for VideoPriorityBasedPolicy.
+- Add more debug logging for choose input device. 
+- Add the meeting and device error sections in the meeting-event guide.
+- Add a `forceUpdate` parameter to use when listing devices. In some cases, builders
+  need to delay the triggering of permission dialogs, _e.g._, when joining a
+  meeting in view-only mode, and then later be able to trigger a permission
+  prompt in order to show device labels. This parameter allows cached device
+  labels to be forcibly discarded and recomputed after the device label trigger
+  is run.
+
+### Changed
+
+- Log error instead of throwing error if the signaling client is not ready to send data message.
+- Now when `setDeviceLabelTrigger` is called, if the `deviceInfoCache` contains a device with no label, `deviceInfoCache` will be cleared.
+
+### Removed
+
+- Remove deprecated unwired webrtc constraints from device controller and peer connection construction.
+- Removed unnecessary restriction on VideoPriorityBasedPolicy to always subscribe to at least one stream.
+
+### Fixed
+
+- Fixed missing upstream video metrics for Firefox browsers.
+- Fix build script to run on Windows by specifying ruby when running ruby scripts and rimraf to remove folder.
+
+## [2.10.0] - 2021-05-19
+
+### Added
+
+- Add new message `MeetingSessionStatusCode` `AudioAttendeeRemoved` to handle the new audio server status code 411.
+- Add support for `WKWebView` on iOS.
+- Output a warning message when the volume adapter cleans up the self-attendee after reconnection.
+- Add FAQ for more information on `AudioJoinFromAnotherDevice` meeting session status code.
+- Add downstream audio webrtc metrics in `observableMetricSpec`.
+- Add `getObservableVideoMetrics` and in `ClientMetricReport` to expose video stream metrics in webrtc.
+- Update `SignalingProtocol` with optional video metric fields.
+
+### Changed
+
+- Update guide for priority based downlink policy.
+- Bump version for lodash, y18n, and ssri dependencies.
+- Mark `getObservableVideoMetrics` optional in ClientMetricReprt and `videoStreamIndex` and `selfAttendeeId` optional in `DefaultClientMetricReport`.
+
+### Removed
+
+### Fixed
+
+- Do not start local video tile if there is no stream for content share.
+
+- Media streams are no longer discarded during reconnects. This fixes an issue
+  where initial signaling connection failures could cause a client to be unable
+  to join a meeting with audio if Web Audio were enabled.
+
+## [2.9.0] - 2021-05-10
+
+### Added
+
+- Add the Messaging section in FAQs to describe how to receive messages
+  without using the Chime SDK for JavaScript.
+- `DefaultAudioVideoFacade.start` now takes an options argument. You can use
+  this to trigger a signaling socket connection prior to device selection: call
+  `audioVideo.start({ signalingOnly: true })`, and then later call
+  `audioVideo.start()` as usual.
+- Added a 'abort-on-reconnect' query parameter to demo URL to trigger fatal
+  on reconnection for use in integration tests (default false).
+
+### Changed
+
+- `startVideoPreviewForVideoInput` uses the active video input stream instead
+  of calling `getUserMedia` again.
+- Meeting connections now do more work in parallel, which will improve
+  meeting join times.
+
+### Removed
+
+### Fixed
+
+- Fix `npm run start:hot` in the browser demo.
+
+## [2.8.0] - 2021-04-23
+
+### Added
+
+- Added new downlink policy `VideoPriorityBasedPolicy`, providing the ability
+  to explicitly request remote video sources to receive and set their respective priorities.  See
+  [this guide](https://aws.github.io/amazon-chime-sdk-js/modules/prioritybased_downlink_policy.html)
+  for more details and a code walkthrough of using the new policy.
+  *(Note that the exact internal behavior of this policy may slightly change in future releases.)*
+- Add optional header parameter to the `MeetingSessionPOSTLogger`.
+- Add extra logging for synthesizing an audio stream.
+- Add logging for `attendeePresenceReceived`.
+- Add reconnection configuration in `MeetingSessionConfiguration`.
+- Add NodeJS 16 to supported engines.
+
+### Changed
+
+- Disable audio properties on the peer connection if the join information
+  does not include an audio host URL.
+- `package-lock.json` files now use the v2 lockfile format.
+- Configuration files now live in `/config`.
+
+### Removed
+
+### Fixed
+
+- `DefaultDeviceController` recreates the `AudioContext` as needed when
+  selecting non-transform devices, and does not do so when the `AudioContext`
+  is suspended.
+- Generated documentation no longer includes private members.
+- Include the default error message in "meetingStartFailed" and "meetingFailed" events.
+- Fix truncation in bps to kbps conversion that causes stream to stop under low bitrate.
+
+## [2.7.0] - 2021-04-05
+
+### Added
+
+- [Demo] Add Tensorflow BodyPix segmentation demo for `VideoProcessor`.
+- Added a workaround for a Chrome issue where Bluetooth audio would sound
+  choppy for other participants when Web Audio was enabled. This workaround
+  recreates the Web Audio context each time an input device is selected.
+
+### Changed
+
+- Update `SignalingProtocol` with optional video metric fields and optional join flags.
+- `DefaultDeviceController` and `DefaultActiveSpeakerDetector` now conform to a
+  new `Destroyable` interface, allowing resources to be explicitly discarded
+  when a meeting is over.
+- `MeetingSessionPOSTLogger` conforms to `Destroyable`. You should call
+  `destroy` when you are done logging unless you plan to close the window.
+
+### Removed
+
+### Fixed
+
+- Improve some unit tests.
+- Fewer observers are now retained after meetings end. This should reduce
+  leaks.
+- Correctly close input streams when ending a call while using a video
+  transform device.
+
+## [2.6.2] - 2021-03-24
+
+### Fixed
+- Calling `realtimeSetLocalAudioInput` as part of `AudioVideoController.restartLocalAudio()` to
+  fix local mute/unmute issue while switching audio devices.
+
+## [2.6.1] - 2021-03-17
+
+### Fixed
+- Fix infinite loop when calling `chooseAudioInputDevice` with a
+  `MediaDeviceInfo` instance.
+
+## [2.6.0] - 2021-03-09
+
+### Added
+
+- Add `SingleNodeAudioTransformDevice` to make simple audio transforms easier to write.
+- Reuse `VoiceFocusAudioNode` instances across transform device operations.
+- Allow a complete configuration to be retrieved from and passed to a
+  `VoiceFocusDeviceTransformer`, making it easier to instantiate a new
+  transformer in a different scope with the same measured settings.
+- Add End-to-end Integration test for Video Test App
+- `MeetingSessionPOSTLogger` now matches the regular `Logger` API signature.
+
+### Changed
+
+- Allow device checker APIs to take devices as input, rather than only MediaDeviceInfo objects.
+- Enable SIMD autodetection for Amazon Voice Focus in Chrome 90+.
+- Clean up task cancel hooks after they cease to be relevant.
+- Enable sender-side bandwidth estimation in Safari.
+- Clean up usage of audioDeviceInformation in ReceiveAudioInputTask.
+
+### Removed
+
+- Removed audioDeviceInformation from AudioVideoControllerState.
+
+### Fixed
+
+- Upgrade ua-parser-js package version to latest.
+- Don't automatically upgrade dev-dependencies to avoid a breaking typedoc upgrade.
+- Safely handle calling logger `debug` methods with `undefined`.
+
+
+## [2.5.0] - 2021-02-16
+
+### Added
+- Add GatheringICECandidate Finish Duration to Meeting Event and to demo app.
+- Add `attendeePresenceReceived`, `audioInputSelected`, `videoInputSelected`,
+  `audioInputUnselected`, and `videoInputUnselected` meeting events.
+- Compute and add `meetingStartDurationMs` as part of the attributes of the
+  `attendeePresenceReceived` meeting event.
+- Add the file sharing workaround for Chrome 88 in FAQs.
+- Add support for Chrome for iOS and Firefox for iOS.
+
+### Changed
+- [Demo] Set `attendeePresenceTimeoutMs` to use value passed as parameter in the URL.
+
+### Removed
+
+### Fixed
+- `DefaultDeviceController` now attempts to resume a suspended `AudioContext`
+  when choosing a transform device (#1062).
+- `DefaultVideoStreamIndex` now ignores old group IDs from a given attendee ID (#1029).
+
+
+## [2.4.1] - 2021-01-28
+
+### Added
+
+### Changed
+
+### Removed
+
+### Fixed
+- Disable reconnecting in AudioVideoControllerFacade's `stop` method.
+  Add documentation for the `stop` method.
+- Fix dropped attendee presence during network reconnects.
+- Add back `.play()` call explicitly for Safari browser to prevent video pause issue for local video.
+
+## [2.4.0] - 2021-01-08
+
+### Added
+- Add support for Amazon Voice Focus support in Safari Technology Preview for macOS.
+  Builders using an explicit revision or asset group must make sure to use a
+  revision no earlier than this; an error will be thrown in Safari if older
+  revisions are used.
+
+### Changed
+
+- Corrected `null` type on `DefaultVideoFrameProcessorPipeline` and `DefaultVideoTransformDevice`.
+- Amazon Voice Focus now makes better use of available CPU resources,
+  extending support to lower-end devices and improving quality on higher-end
+  devices.
+
+### Removed
+
+### Fixed
+
+- [Documentation] Corrected name for `voiceFocusInsufficientResources` in documentation.
+- Allow for `realtimeUnsubscribeFromVolumeIndicator` to unsubscribe from specific callbacks.
+- Correctly mute video elements when bound, preventing local echo when sharing tabs via content
+  share.
+- [Demo] Local content share (e.g., video files) now plays audio through the selected audio
+  output device, rather than the default device, in browsers that support `setSinkId`.
+
+## [2.3.0] - 2020-12-21
+
+### Added
+
+- Add Samsung Internet browser for Android as a supported browser.
+- [Documentation] Add documentation for video processing APIs.
+- Add `DefaultVideoTransformDevice` to implement `VideoTransformDevice`.
+  `VideoFrameProcessor`, `VideoFrameProcessorPipeline` and `VideoFrameBuffer` interfaces
+  are added to support `DefaultVideoTransformDevice` and allow processing steps to be applied to device.
+  The method `chooseVideoInputDevice` in `DefaultDeviceController` can handle `VideoTransformDevice` now.
+
+### Changed
+
+### Removed
+
+### Fixed
+
+## [2.2.1] - 2020-12-11
+
+### Added
+
+### Changed
+
+### Removed
+
+### Fixed
+
+- Binding audio elements will no longer throw an error unless calling code is
+  trying to choose an output device in a browser that does not support
+  `setSinkId`, and the demo will not log an error in these cases.
+- [Demo] The meeting readiness checker no longer re-initializes the device output list
+  after the user picks a device.
+- [Test] Fix Amazon Voice Focus integration/canary test.
+- [Demo] Additional best practices around choosing audio output devices.
+
+## [2.2.0] - 2020-12-04
+
+### Added
+
+- [Documentation] What happens when participants try to `startLocalVideoTile` when local video tile limit reached
+
+### Changed
+
+- Log error if pass undefined device when calling choose input device
+- Doing typecheck for MediaDeviceInfo
+- Set automated integ test coverage on recent version of browsers
+
+### Removed
+
+### Fixed
+
+- Allow Amazon Voice Focus code to load (but not function) in unsupported
+  browsers that do not define `globalThis`.
+- Fix uncaught promise exception for bindAudioOutput API
+- [Demo] Fix meeting readiness checker speaker test failing in Safari
+- [Demo] Validate metrics data while showing video WebRTC stats
+
 ## [2.1.0] - 2020-11-23
 
 ### Added
@@ -25,6 +393,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - [Documentation] Update the Amazon Chime SDK Media Regions documentation link in the README
 - Reimplement error handling in `DefaultRealtimeController` to generate less garbage.
 - Add github actions fix to conditionally run integ tests
+- [Documentation] Correct docstring for `VoiceFocusTransformDevice`.
+- [Script] Add prepublish script to verify CDN configuration.
 
 ## [2.0.0] - 2020-11-18
 

@@ -26,6 +26,7 @@ import BaseConnectionHealthPolicy from './connectionhealthpolicy/BaseConnectionH
 import BaseTask from './task/BaseTask';
 import BitrateParameters from './videouplinkbandwidthpolicy/BitrateParameters';
 import BrowserBehavior from './browserbehavior/BrowserBehavior';
+import CanvasVideoFrameBuffer from './videoframeprocessor/CanvasVideoFrameBuffer';
 import CheckAudioConnectivityFeedback from './meetingreadinesschecker/CheckAudioConnectivityFeedback';
 import CheckAudioInputFeedback from './meetingreadinesschecker/CheckAudioInputFeedback';
 import CheckAudioOutputFeedback from './meetingreadinesschecker/CheckAudioOutputFeedback';
@@ -67,6 +68,7 @@ import DefaultDeviceController from './devicecontroller/DefaultDeviceController'
 import DefaultDevicePixelRatioMonitor from './devicepixelratiomonitor/DefaultDevicePixelRatioMonitor';
 import DefaultEventController from './eventcontroller/DefaultEventController';
 import DefaultMediaDeviceFactory from './mediadevicefactory/DefaultMediaDeviceFactory';
+import DefaultMeetingEventReporter from './eventreporter/DefaultMeetingEventReporter';
 import DefaultMeetingReadinessChecker from './meetingreadinesschecker/DefaultMeetingReadinessChecker';
 import DefaultMeetingSession from './meetingsession/DefaultMeetingSession';
 import DefaultMessagingSession from './messagingsession/DefaultMessagingSession';
@@ -81,14 +83,19 @@ import DefaultSignalingClient from './signalingclient/DefaultSignalingClient';
 import DefaultSimulcastUplinkPolicy from './videouplinkbandwidthpolicy/DefaultSimulcastUplinkPolicy';
 import DefaultStatsCollector from './statscollector/DefaultStatsCollector';
 import DefaultTransceiverController from './transceivercontroller/DefaultTransceiverController';
+import DefaultUserAgentParser from './useragentparser/DefaultUserAgentParser';
 import DefaultVideoCaptureAndEncodeParameter from './videocaptureandencodeparameter/DefaultVideoCaptureAndEncodeParameter';
+import DefaultVideoFrameProcessorPipeline from './videoframeprocessor/DefaultVideoFrameProcessorPipeline';
 import DefaultVideoStreamIdSet from './videostreamidset/DefaultVideoStreamIdSet';
 import DefaultVideoStreamIndex from './videostreamindex/DefaultVideoStreamIndex';
 import DefaultVideoTile from './videotile/DefaultVideoTile';
 import DefaultVideoTileController from './videotilecontroller/DefaultVideoTileController';
 import DefaultVideoTileFactory from './videotilefactory/DefaultVideoTileFactory';
+import DefaultVideoTransformDevice from './videoframeprocessor/DefaultVideoTransformDevice';
+import DefaultVideoTransformDeviceObserver from './videoframeprocessor/DefaultVideoTransformDeviceObserver';
 import DefaultVolumeIndicatorAdapter from './volumeindicatoradapter/DefaultVolumeIndicatorAdapter';
 import DefaultWebSocketAdapter from './websocketadapter/DefaultWebSocketAdapter';
+import Destroyable from './destroyable/Destroyable';
 import Device from './devicecontroller/Device';
 import DeviceChangeObserver from './devicechangeobserver/DeviceChangeObserver';
 import DeviceController from './devicecontroller/DeviceController';
@@ -99,15 +106,25 @@ import DevicePixelRatioObserver from './devicepixelratioobserver/DevicePixelRati
 import DevicePixelRatioSource from './devicepixelratiosource/DevicePixelRatioSource';
 import DevicePixelRatioWindowSource from './devicepixelratiosource/DevicePixelRatioWindowSource';
 import DeviceSelection from './devicecontroller/DeviceSelection';
+import Eq from './videodownlinkbandwidthpolicy/Eq';
 import EventAttributes from './eventcontroller/EventAttributes';
+import EventBuffer from './eventbuffer/EventBuffer';
+import EventBufferConfiguration from './eventbufferconfiguration/EventBufferConfiguration';
 import EventController from './eventcontroller/EventController';
+import EventData from './eventreporter/EventData';
+import EventIngestionConfiguration from './eventingestionconfiguration/EventIngestionConfiguration';
 import EventName from './eventcontroller/EventName';
+import EventReporter from './eventreporter/EventReporter';
+import EventsClientConfiguration from './eventsclientconfiguration/EventsClientConfiguration';
+import EventsIngestionMetadata from './eventreporter/EventsIngestionMetadata';
+import ExtendedBrowserBehavior from './browserbehavior/ExtendedBrowserBehavior';
 import FinishGatheringICECandidatesTask from './task/FinishGatheringICECandidatesTask';
 import FullJitterBackoff from './backoff/FullJitterBackoff';
 import FullJitterBackoffFactory from './backoff/FullJitterBackoffFactory';
 import FullJitterLimitedBackoff from './backoff/FullJitterLimitedBackoff';
 import GetUserMediaError from './devicecontroller/GetUserMediaError';
 import GlobalMetricReport from './clientmetricreport/GlobalMetricReport';
+import InMemoryJSONEventBuffer from './eventbuffer/InMemoryJSONEventBuffer';
 import IntervalScheduler from './scheduler/IntervalScheduler';
 import JoinAndReceiveIndexTask from './task/JoinAndReceiveIndexTask';
 import LeaveAndReceiveLeaveAckTask from './task/LeaveAndReceiveLeaveAckTask';
@@ -120,6 +137,8 @@ import MaybeProvider from './maybe/MaybeProvider';
 import MediaDeviceFactory from './mediadevicefactory/MediaDeviceFactory';
 import MediaDeviceProxyHandler from './mediadevicefactory/MediaDeviceProxyHandler';
 import MediaStreamBroker from './mediastreambroker/MediaStreamBroker';
+import MeetingEventsClientConfiguration from './eventsclientconfiguration/MeetingEventsClientConfiguration';
+import MeetingEventsClientConfigurationAttributes from './eventsclientconfiguration/MeetingEventsClientConfigurationAttributes';
 import MeetingHistoryState from './eventcontroller/MeetingHistoryState';
 import MeetingReadinessChecker from './meetingreadinesschecker/MeetingReadinessChecker';
 import MeetingReadinessCheckerConfiguration from './meetingreadinesschecker/MeetingReadinessCheckerConfiguration';
@@ -145,18 +164,22 @@ import NScaleVideoUplinkBandwidthPolicy from './videouplinkbandwidthpolicy/NScal
 import NoOpAudioVideoController from './audiovideocontroller/NoOpAudioVideoController';
 import NoOpDebugLogger from './logger/NoOpDebugLogger';
 import NoOpDeviceController from './devicecontroller/NoOpDeviceController';
+import NoOpEventReporter from './eventreporter/NoOpEventReporter';
 import NoOpLogger from './logger/NoOpLogger';
 import NoOpMediaStreamBroker from './mediastreambroker/NoOpMediaStreamBroker';
 import NoOpTask from './task/NoOpTask';
 import NoOpVideoElementFactory from './videoelementfactory/NoOpVideoElementFactory';
+import NoOpVideoFrameProcessor from './videoframeprocessor/NoOpVideoFrameProcessor';
 import NoVideoDownlinkBandwidthPolicy from './videodownlinkbandwidthpolicy/NoVideoDownlinkBandwidthPolicy';
 import NoVideoUplinkBandwidthPolicy from './videouplinkbandwidthpolicy/NoVideoUplinkBandwidthPolicy';
 import None from './maybe/None';
 import NotFoundError from './devicecontroller/NotFoundError';
 import NotReadableError from './devicecontroller/NotReadableError';
+import OnceTask from './task/OnceTask';
 import OpenSignalingConnectionTask from './task/OpenSignalingConnectionTask';
 import OverconstrainedError from './devicecontroller/OverconstrainedError';
 import ParallelGroupTask from './task/ParallelGroupTask';
+import PartialOrd from './videodownlinkbandwidthpolicy/PartialOrd';
 import PermissionDeniedError from './devicecontroller/PermissionDeniedError';
 import PingPong from './pingpong/PingPong';
 import PingPongObserver from './pingpongobserver/PingPongObserver';
@@ -171,6 +194,7 @@ import ReceiveVideoInputTask from './task/ReceiveVideoInputTask';
 import ReceiveVideoStreamIndexTask from './task/ReceiveVideoStreamIndexTask';
 import ReconnectController from './reconnectcontroller/ReconnectController';
 import ReconnectionHealthPolicy from './connectionhealthpolicy/ReconnectionHealthPolicy';
+import ReleaseMediaStreamsTask from './task/ReleaseMediaStreamsTask';
 import RemovableAnalyserNode from './devicecontroller/RemovableAnalyserNode';
 import RemovableObserver from './removableobserver/RemovableObserver';
 import RunnableTask from './task/RunnableTask';
@@ -200,10 +224,12 @@ import SimulcastTransceiverController from './transceivercontroller/SimulcastTra
 import SimulcastUplinkObserver from './videouplinkbandwidthpolicy/SimulcastUplinkObserver';
 import SimulcastUplinkPolicy from './videouplinkbandwidthpolicy/SimulcastUplinkPolicy';
 import SimulcastVideoStreamIndex from './videostreamindex/SimulcastVideoStreamIndex';
+import SingleNodeAudioTransformDevice from './devicecontroller/SingleNodeAudioTransformDevice';
 import Some from './maybe/Some';
 import StatsCollector from './statscollector/StatsCollector';
 import StreamMetricReport from './clientmetricreport/StreamMetricReport';
 import SubscribeAndReceiveSubscribeAckTask from './task/SubscribeAndReceiveSubscribeAckTask';
+import TargetDisplaySize from './videodownlinkbandwidthpolicy/TargetDisplaySize';
 import Task from './task/Task';
 import TaskCanceler from './taskcanceler/TaskCanceler';
 import TaskStatus from './task/TaskStatus';
@@ -212,13 +238,24 @@ import TimeoutTask from './task/TimeoutTask';
 import TransceiverController from './transceivercontroller/TransceiverController';
 import TypeError from './devicecontroller/TypeError';
 import UnusableAudioWarningConnectionHealthPolicy from './connectionhealthpolicy/UnusableAudioWarningConnectionHealthPolicy';
+import UserAgentParser from './useragentparser/UserAgentParser';
 import Versioning from './versioning/Versioning';
 import VideoAdaptiveProbePolicy from './videodownlinkbandwidthpolicy/VideoAdaptiveProbePolicy';
 import VideoCaptureAndEncodeParameter from './videocaptureandencodeparameter/VideoCaptureAndEncodeParameter';
 import VideoDownlinkBandwidthPolicy from './videodownlinkbandwidthpolicy/VideoDownlinkBandwidthPolicy';
+import VideoDownlinkObserver from './videodownlinkbandwidthpolicy/VideoDownlinkObserver';
 import VideoElementFactory from './videoelementfactory/VideoElementFactory';
+import VideoFrameBuffer from './videoframeprocessor/VideoFrameBuffer';
+import VideoFrameProcessor from './videoframeprocessor/VideoFrameProcessor';
+import VideoFrameProcessorPipeline from './videoframeprocessor/VideoFrameProcessorPipeline';
+import VideoFrameProcessorPipelineObserver from './videoframeprocessor/VideoFrameProcessorPipelineObserver';
 import VideoInputDevice from './devicecontroller/VideoInputDevice';
 import VideoLogEvent from './statscollector/VideoLogEvent';
+import VideoOnlyTransceiverController from './transceivercontroller/VideoOnlyTransceiverController';
+import VideoPreference from './videodownlinkbandwidthpolicy/VideoPreference';
+import VideoPreferences from './videodownlinkbandwidthpolicy/VideoPreferences';
+import VideoPriorityBasedPolicy from './videodownlinkbandwidthpolicy/VideoPriorityBasedPolicy';
+import VideoPriorityBasedPolicyConfig from './videodownlinkbandwidthpolicy/VideoPriorityBasedPolicyConfig';
 import VideoQualitySettings from './devicecontroller/VideoQualitySettings';
 import VideoSource from './videosource/VideoSource';
 import VideoStreamDescription from './videostreamindex/VideoStreamDescription';
@@ -239,10 +276,13 @@ import VoiceFocusSpec from './voicefocus/VoiceFocusSpec';
 import VoiceFocusTransformDevice from './voicefocus/VoiceFocusTransformDevice';
 import VoiceFocusTransformDeviceObserver from './voicefocus/VoiceFocusTransformDeviceObserver';
 import VolumeIndicatorAdapter from './volumeindicatoradapter/VolumeIndicatorAdapter';
+import VolumeIndicatorCallback from './realtimecontroller/VolumeIndicatorCallback';
 import WaitForAttendeePresenceTask from './task/WaitForAttendeePresenceTask';
 import WebSocketAdapter from './websocketadapter/WebSocketAdapter';
 import WebSocketReadyState from './websocketadapter/WebSocketReadyState';
+import { MutableVideoPreferences } from './videodownlinkbandwidthpolicy/VideoPreferences';
 import { isAudioTransformDevice } from './devicecontroller/AudioTransformDevice';
+import { isDestroyable } from './destroyable/Destroyable';
 import { isVideoTransformDevice } from './devicecontroller/VideoTransformDevice';
 
 export {
@@ -274,6 +314,7 @@ export {
   BaseTask,
   BitrateParameters,
   BrowserBehavior,
+  CanvasVideoFrameBuffer,
   CheckAudioConnectivityFeedback,
   CheckAudioInputFeedback,
   CheckAudioOutputFeedback,
@@ -315,6 +356,7 @@ export {
   DefaultDevicePixelRatioMonitor,
   DefaultEventController,
   DefaultMediaDeviceFactory,
+  DefaultMeetingEventReporter,
   DefaultMeetingReadinessChecker,
   DefaultMeetingSession,
   DefaultMessagingSession,
@@ -329,14 +371,19 @@ export {
   DefaultSimulcastUplinkPolicy,
   DefaultStatsCollector,
   DefaultTransceiverController,
+  DefaultUserAgentParser,
   DefaultVideoCaptureAndEncodeParameter,
+  DefaultVideoFrameProcessorPipeline,
   DefaultVideoStreamIdSet,
   DefaultVideoStreamIndex,
   DefaultVideoTile,
   DefaultVideoTileController,
   DefaultVideoTileFactory,
+  DefaultVideoTransformDevice,
+  DefaultVideoTransformDeviceObserver,
   DefaultVolumeIndicatorAdapter,
   DefaultWebSocketAdapter,
+  Destroyable,
   Device,
   DeviceChangeObserver,
   DeviceController,
@@ -347,15 +394,25 @@ export {
   DevicePixelRatioSource,
   DevicePixelRatioWindowSource,
   DeviceSelection,
+  Eq,
   EventAttributes,
+  EventBuffer,
+  EventBufferConfiguration,
   EventController,
+  EventData,
+  EventIngestionConfiguration,
   EventName,
+  EventReporter,
+  EventsClientConfiguration,
+  EventsIngestionMetadata,
+  ExtendedBrowserBehavior,
   FinishGatheringICECandidatesTask,
   FullJitterBackoff,
   FullJitterBackoffFactory,
   FullJitterLimitedBackoff,
   GetUserMediaError,
   GlobalMetricReport,
+  InMemoryJSONEventBuffer,
   IntervalScheduler,
   JoinAndReceiveIndexTask,
   LeaveAndReceiveLeaveAckTask,
@@ -368,6 +425,8 @@ export {
   MediaDeviceFactory,
   MediaDeviceProxyHandler,
   MediaStreamBroker,
+  MeetingEventsClientConfiguration,
+  MeetingEventsClientConfigurationAttributes,
   MeetingHistoryState,
   MeetingReadinessChecker,
   MeetingReadinessCheckerConfiguration,
@@ -389,22 +448,27 @@ export {
   Modality,
   MonitorTask,
   MultiLogger,
+  MutableVideoPreferences,
   NScaleVideoUplinkBandwidthPolicy,
   NoOpAudioVideoController,
   NoOpDebugLogger,
   NoOpDeviceController,
+  NoOpEventReporter,
   NoOpLogger,
   NoOpMediaStreamBroker,
   NoOpTask,
   NoOpVideoElementFactory,
+  NoOpVideoFrameProcessor,
   NoVideoDownlinkBandwidthPolicy,
   NoVideoUplinkBandwidthPolicy,
   None,
   NotFoundError,
   NotReadableError,
+  OnceTask,
   OpenSignalingConnectionTask,
   OverconstrainedError,
   ParallelGroupTask,
+  PartialOrd,
   PermissionDeniedError,
   PingPong,
   PingPongObserver,
@@ -419,6 +483,7 @@ export {
   ReceiveVideoStreamIndexTask,
   ReconnectController,
   ReconnectionHealthPolicy,
+  ReleaseMediaStreamsTask,
   RemovableAnalyserNode,
   RemovableObserver,
   RunnableTask,
@@ -448,10 +513,12 @@ export {
   SimulcastUplinkObserver,
   SimulcastUplinkPolicy,
   SimulcastVideoStreamIndex,
+  SingleNodeAudioTransformDevice,
   Some,
   StatsCollector,
   StreamMetricReport,
   SubscribeAndReceiveSubscribeAckTask,
+  TargetDisplaySize,
   Task,
   TaskCanceler,
   TaskStatus,
@@ -460,13 +527,24 @@ export {
   TransceiverController,
   TypeError,
   UnusableAudioWarningConnectionHealthPolicy,
+  UserAgentParser,
   Versioning,
   VideoAdaptiveProbePolicy,
   VideoCaptureAndEncodeParameter,
   VideoDownlinkBandwidthPolicy,
+  VideoDownlinkObserver,
   VideoElementFactory,
+  VideoFrameBuffer,
+  VideoFrameProcessor,
+  VideoFrameProcessorPipeline,
+  VideoFrameProcessorPipelineObserver,
   VideoInputDevice,
   VideoLogEvent,
+  VideoOnlyTransceiverController,
+  VideoPreference,
+  VideoPreferences,
+  VideoPriorityBasedPolicy,
+  VideoPriorityBasedPolicyConfig,
   VideoQualitySettings,
   VideoSource,
   VideoStreamDescription,
@@ -487,9 +565,11 @@ export {
   VoiceFocusTransformDevice,
   VoiceFocusTransformDeviceObserver,
   VolumeIndicatorAdapter,
+  VolumeIndicatorCallback,
   WaitForAttendeePresenceTask,
   WebSocketAdapter,
   WebSocketReadyState,
   isAudioTransformDevice,
+  isDestroyable,
   isVideoTransformDevice,
 }

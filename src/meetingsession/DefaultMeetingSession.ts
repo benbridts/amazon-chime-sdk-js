@@ -10,7 +10,13 @@ import DefaultBrowserBehavior from '../browserbehavior/DefaultBrowserBehavior';
 import ContentShareController from '../contentsharecontroller/ContentShareController';
 import ContentShareMediaStreamBroker from '../contentsharecontroller/ContentShareMediaStreamBroker';
 import DefaultContentShareController from '../contentsharecontroller/DefaultContentShareController';
+import Destroyable, { isDestroyable } from '../destroyable/Destroyable';
 import DeviceController from '../devicecontroller/DeviceController';
+import EventIngestionConfiguration from '../eventingestionconfiguration/EventIngestionConfiguration';
+import DefaultMeetingEventReporter from '../eventreporter/DefaultMeetingEventReporter';
+import EventReporter from '../eventreporter/EventReporter';
+import EventsClientConfiguration from '../eventsclientconfiguration/EventsClientConfiguration';
+import MeetingEventsClientConfiguration from '../eventsclientconfiguration/MeetingEventsClientConfiguration';
 import Logger from '../logger/Logger';
 import DeviceControllerBasedMediaStreamBroker from '../mediastreambroker/DeviceControllerBasedMediaStreamBroker';
 import DefaultReconnectController from '../reconnectcontroller/DefaultReconnectController';
@@ -18,29 +24,27 @@ import DefaultWebSocketAdapter from '../websocketadapter/DefaultWebSocketAdapter
 import MeetingSession from './MeetingSession';
 import MeetingSessionConfiguration from './MeetingSessionConfiguration';
 
-export default class DefaultMeetingSession implements MeetingSession {
+export default class DefaultMeetingSession implements MeetingSession, Destroyable {
   private _configuration: MeetingSessionConfiguration;
   private _logger: Logger;
   private audioVideoController: AudioVideoController;
   private contentShareController: ContentShareController;
   private _deviceController: DeviceController;
   private audioVideoFacade: AudioVideoFacade;
-
-  private static RECONNECT_TIMEOUT_MS = 120 * 1000;
-  private static RECONNECT_FIXED_WAIT_MS = 0;
-  private static RECONNECT_SHORT_BACKOFF_MS = 1 * 1000;
-  private static RECONNECT_LONG_BACKOFF_MS = 5 * 1000;
+  private _eventReporter: EventReporter;
 
   constructor(
     configuration: MeetingSessionConfiguration,
     logger: Logger,
-    deviceController: DeviceControllerBasedMediaStreamBroker
+    deviceController: DeviceControllerBasedMediaStreamBroker,
+    eventReporter?: EventReporter
   ) {
     this._configuration = configuration;
     this._logger = logger;
 
     this.checkBrowserSupportAndFeatureConfiguration();
 
+    this.setupEventReporter(configuration, logger, eventReporter);
     this._deviceController = deviceController;
     this.audioVideoController = new DefaultAudioVideoController(
       this._configuration,
@@ -48,13 +52,14 @@ export default class DefaultMeetingSession implements MeetingSession {
       new DefaultWebSocketAdapter(this._logger),
       deviceController,
       new DefaultReconnectController(
-        DefaultMeetingSession.RECONNECT_TIMEOUT_MS,
+        this._configuration.reconnectTimeoutMs,
         new FullJitterBackoff(
-          DefaultMeetingSession.RECONNECT_FIXED_WAIT_MS,
-          DefaultMeetingSession.RECONNECT_SHORT_BACKOFF_MS,
-          DefaultMeetingSession.RECONNECT_LONG_BACKOFF_MS
+          this._configuration.reconnectFixedWaitMs,
+          this._configuration.reconnectShortBackOffMs,
+          this._configuration.reconnectLongBackOffMs
         )
-      )
+      ),
+      this._eventReporter
     );
     deviceController.bindToAudioVideoController(this.audioVideoController);
     const contentShareMediaStreamBroker = new ContentShareMediaStreamBroker(this._logger);
@@ -68,11 +73,11 @@ export default class DefaultMeetingSession implements MeetingSession {
         new DefaultWebSocketAdapter(this._logger),
         contentShareMediaStreamBroker,
         new DefaultReconnectController(
-          DefaultMeetingSession.RECONNECT_TIMEOUT_MS,
+          this._configuration.reconnectTimeoutMs,
           new FullJitterBackoff(
-            DefaultMeetingSession.RECONNECT_FIXED_WAIT_MS,
-            DefaultMeetingSession.RECONNECT_SHORT_BACKOFF_MS,
-            DefaultMeetingSession.RECONNECT_LONG_BACKOFF_MS
+            this._configuration.reconnectFixedWaitMs,
+            this._configuration.reconnectShortBackOffMs,
+            this._configuration.reconnectLongBackOffMs
           )
         )
       ),
@@ -106,6 +111,64 @@ export default class DefaultMeetingSession implements MeetingSession {
 
   get deviceController(): DeviceController {
     return this._deviceController;
+  }
+
+  get eventReporter(): EventReporter {
+    return this._eventReporter;
+  }
+
+  /**
+   * Clean up this instance and resources that it created.
+   *
+   * After calling `destroy`, internal fields like `audioVideoController` will be unavailable.
+   */
+  async destroy(): Promise<void> {
+    if (isDestroyable(this.contentShareController)) {
+      await this.contentShareController.destroy();
+    }
+    if (isDestroyable(this.audioVideoController)) {
+      await this.audioVideoController.destroy();
+    }
+    if (isDestroyable(this.eventReporter)) {
+      await this.eventReporter.destroy();
+    }
+
+    this._logger = undefined;
+    this._configuration = undefined;
+    this._deviceController = undefined;
+    this.audioVideoFacade = undefined;
+    this.audioVideoController = undefined;
+    this.contentShareController = undefined;
+    this._eventReporter = undefined;
+  }
+
+  private setupEventReporter(
+    configuration: MeetingSessionConfiguration,
+    logger: Logger,
+    eventReporter?: EventReporter
+  ): void {
+    if (eventReporter) {
+      this._eventReporter = eventReporter;
+    } else {
+      const eventIngestionURL = configuration.urls.eventIngestionURL;
+      if (eventIngestionURL) {
+        this.logger.info(`Event ingestion URL is present in the configuration`);
+        const {
+          meetingId,
+          credentials: { attendeeId, joinToken },
+        } = configuration;
+        const meetingEventsClientConfiguration: EventsClientConfiguration = new MeetingEventsClientConfiguration(
+          meetingId,
+          attendeeId,
+          joinToken
+        );
+        const eventIngestionConfiguration = new EventIngestionConfiguration(
+          meetingEventsClientConfiguration,
+          eventIngestionURL
+        );
+        this._eventReporter = new DefaultMeetingEventReporter(eventIngestionConfiguration, logger);
+      }
+    }
   }
 
   private checkBrowserSupportAndFeatureConfiguration(): void {

@@ -9,9 +9,20 @@ var __awaiter = (this && this.__awaiter) || function (thisArg, _arguments, P, ge
     });
 };
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.isOldChrome = exports.supportsWASMStreaming = exports.supportsSharedArrayBuffer = exports.supportsWASM = exports.supportsAudioWorklet = exports.supportsWorker = exports.supportsVoiceFocusWorker = void 0;
+exports.isOldChrome = exports.supportsWASMStreaming = exports.supportsSharedArrayBuffer = exports.supportsWASM = exports.supportsAudioWorklet = exports.supportsWorker = exports.supportsVoiceFocusWorker = exports.supportsWASMPostMessage = exports.isSafari = void 0;
 const loader_js_1 = require("./loader.js");
-exports.supportsVoiceFocusWorker = (scope = globalThis, fetchConfig, logger) => __awaiter(void 0, void 0, void 0, function* () {
+const isSafari = (global = globalThis) => {
+    const ua = global.navigator.userAgent;
+    const hasSafari = ua.match(/Safari\//);
+    const hasChrome = ua.match(/Chrom(?:e|ium)\//);
+    return !!(hasSafari && !hasChrome);
+};
+exports.isSafari = isSafari;
+const supportsWASMPostMessage = (global = globalThis) => {
+    return !exports.isSafari(global);
+};
+exports.supportsWASMPostMessage = supportsWASMPostMessage;
+const supportsVoiceFocusWorker = (scope = globalThis, fetchConfig, logger) => __awaiter(void 0, void 0, void 0, function* () {
     if (!exports.supportsWorker(scope, logger)) {
         return false;
     }
@@ -31,7 +42,8 @@ exports.supportsVoiceFocusWorker = (scope = globalThis, fetchConfig, logger) => 
         return false;
     }
 });
-exports.supportsWorker = (scope = globalThis, logger) => {
+exports.supportsVoiceFocusWorker = supportsVoiceFocusWorker;
+const supportsWorker = (scope = globalThis, logger) => {
     try {
         return !!scope.Worker;
     }
@@ -40,7 +52,8 @@ exports.supportsWorker = (scope = globalThis, logger) => {
         return false;
     }
 };
-exports.supportsAudioWorklet = (scope = globalThis, logger) => {
+exports.supportsWorker = supportsWorker;
+const supportsAudioWorklet = (scope = globalThis, logger) => {
     try {
         return !!scope.AudioWorklet && !!scope.AudioWorkletNode;
     }
@@ -49,16 +62,18 @@ exports.supportsAudioWorklet = (scope = globalThis, logger) => {
         return false;
     }
 };
-exports.supportsWASM = (scope = globalThis, logger) => {
+exports.supportsAudioWorklet = supportsAudioWorklet;
+const supportsWASM = (scope = globalThis, logger) => {
     try {
-        return !!scope.WebAssembly;
+        return !!scope.WebAssembly && (!!scope.WebAssembly.compile || !!scope.WebAssembly.compileStreaming);
     }
     catch (e) {
         logger === null || logger === void 0 ? void 0 : logger.info('Does not support WASM', e);
         return false;
     }
 };
-exports.supportsSharedArrayBuffer = (scope = globalThis, window = globalThis, logger) => {
+exports.supportsWASM = supportsWASM;
+const supportsSharedArrayBuffer = (scope = globalThis, window = globalThis, logger) => {
     try {
         return !!scope.SharedArrayBuffer && (!!window.chrome || !!scope.crossOriginIsolated);
     }
@@ -67,7 +82,8 @@ exports.supportsSharedArrayBuffer = (scope = globalThis, window = globalThis, lo
         return false;
     }
 };
-exports.supportsWASMStreaming = (scope = globalThis, logger) => {
+exports.supportsSharedArrayBuffer = supportsSharedArrayBuffer;
+const supportsWASMStreaming = (scope = globalThis, logger) => {
     var _a;
     try {
         return !!((_a = scope.WebAssembly) === null || _a === void 0 ? void 0 : _a.compileStreaming);
@@ -77,7 +93,9 @@ exports.supportsWASMStreaming = (scope = globalThis, logger) => {
         return false;
     }
 };
-exports.isOldChrome = (global = globalThis, logger) => {
+exports.supportsWASMStreaming = supportsWASMStreaming;
+const SUPPORTED_CHROME_VERSION = 90;
+const isOldChrome = (global = globalThis, logger) => {
     try {
         if (!global.chrome) {
             return false;
@@ -90,5 +108,10 @@ exports.isOldChrome = (global = globalThis, logger) => {
         logger === null || logger === void 0 ? void 0 : logger.debug('Unknown Chrome version.');
         return true;
     }
-    return true;
+    if (parseInt(versionCheck[1], 10) < SUPPORTED_CHROME_VERSION) {
+        logger === null || logger === void 0 ? void 0 : logger.debug(`Chrome ${versionCheck[1]} has incomplete SIMD support.`);
+        return true;
+    }
+    return false;
 };
+exports.isOldChrome = isOldChrome;

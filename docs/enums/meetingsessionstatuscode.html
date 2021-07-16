@@ -73,6 +73,7 @@
 						<section class="tsd-index-section ">
 							<h3>Enumeration members</h3>
 							<ul class="tsd-index-list">
+								<li class="tsd-kind-enum-member tsd-parent-kind-enum"><a href="meetingsessionstatuscode.html#audioattendeeremoved" class="tsd-kind-icon">Audio<wbr>Attendee<wbr>Removed</a></li>
 								<li class="tsd-kind-enum-member tsd-parent-kind-enum"><a href="meetingsessionstatuscode.html#audioauthenticationrejected" class="tsd-kind-icon">Audio<wbr>Authentication<wbr>Rejected</a></li>
 								<li class="tsd-kind-enum-member tsd-parent-kind-enum"><a href="meetingsessionstatuscode.html#audiocallatcapacity" class="tsd-kind-icon">Audio<wbr>Call<wbr>AtCapacity</a></li>
 								<li class="tsd-kind-enum-member tsd-parent-kind-enum"><a href="meetingsessionstatuscode.html#audiocallended" class="tsd-kind-icon">Audio<wbr>Call<wbr>Ended</a></li>
@@ -106,6 +107,21 @@
 			</section>
 			<section class="tsd-panel-group tsd-member-group ">
 				<h2>Enumeration members</h2>
+				<section class="tsd-panel tsd-member tsd-kind-enum-member tsd-parent-kind-enum">
+					<a name="audioattendeeremoved" class="tsd-anchor"></a>
+					<h3>Audio<wbr>Attendee<wbr>Removed</h3>
+					<div class="tsd-signature tsd-kind-icon">Audio<wbr>Attendee<wbr>Removed<span class="tsd-signature-symbol">:</span> <span class="tsd-signature-symbol"> = 24</span></div>
+					<aside class="tsd-sources">
+						<ul>
+							<li>Defined in <a href="https://github.com/aws/amazon-chime-sdk-js/blob/master/src/meetingsession/MeetingSessionStatusCode.ts#L157">src/meetingsession/MeetingSessionStatusCode.ts:157</a></li>
+						</ul>
+					</aside>
+					<div class="tsd-comment tsd-typography">
+						<div class="lead">
+							<p>The meeting was ended because the attendee has been removed.</p>
+						</div>
+					</div>
+				</section>
 				<section class="tsd-panel tsd-member tsd-kind-enum-member tsd-parent-kind-enum">
 					<a name="audioauthenticationrejected" class="tsd-anchor"></a>
 					<h3>Audio<wbr>Authentication<wbr>Rejected</h3>
@@ -148,7 +164,7 @@
 					<div class="tsd-comment tsd-typography">
 						<div class="lead">
 							<p>Deprecated. The meeting has ended. This is a legacy alias for MeetingEnded and will
-							be removed in v2.0.0.</p>
+							be removed in v3.0.0.</p>
 						</div>
 					</div>
 				</section>
@@ -158,12 +174,13 @@
 					<div class="tsd-signature tsd-kind-icon">Audio<wbr>Device<wbr>Switched<span class="tsd-signature-symbol">:</span> <span class="tsd-signature-symbol"> = 20</span></div>
 					<aside class="tsd-sources">
 						<ul>
-							<li>Defined in <a href="https://github.com/aws/amazon-chime-sdk-js/blob/master/src/meetingsession/MeetingSessionStatusCode.ts#L127">src/meetingsession/MeetingSessionStatusCode.ts:127</a></li>
+							<li>Defined in <a href="https://github.com/aws/amazon-chime-sdk-js/blob/master/src/meetingsession/MeetingSessionStatusCode.ts#L137">src/meetingsession/MeetingSessionStatusCode.ts:137</a></li>
 						</ul>
 					</aside>
 					<div class="tsd-comment tsd-typography">
 						<div class="lead">
-							<p>Audio device has switched.</p>
+							<p>Deprecated. Audio device has switched.
+							This will be removed in v3.0.0.</p>
 						</div>
 					</div>
 				</section>
@@ -178,8 +195,8 @@
 					</aside>
 					<div class="tsd-comment tsd-typography">
 						<div class="lead">
-							<p>The attendee should explicitly switch itself from joined with audio to
-							checked-in.</p>
+							<p>Deprecated. The attendee should explicitly switch itself from joined with audio to
+							checked-in. This will be removed in v3.0.0.</p>
 						</div>
 					</div>
 				</section>
@@ -249,7 +266,7 @@
 					<div class="tsd-signature tsd-kind-icon">Connection<wbr>Health<wbr>Reconnect<span class="tsd-signature-symbol">:</span> <span class="tsd-signature-symbol"> = 17</span></div>
 					<aside class="tsd-sources">
 						<ul>
-							<li>Defined in <a href="https://github.com/aws/amazon-chime-sdk-js/blob/master/src/meetingsession/MeetingSessionStatusCode.ts#L112">src/meetingsession/MeetingSessionStatusCode.ts:112</a></li>
+							<li>Defined in <a href="https://github.com/aws/amazon-chime-sdk-js/blob/master/src/meetingsession/MeetingSessionStatusCode.ts#L121">src/meetingsession/MeetingSessionStatusCode.ts:121</a></li>
 						</ul>
 					</aside>
 					<div class="tsd-comment tsd-typography">
@@ -264,7 +281,7 @@
 					<div class="tsd-signature tsd-kind-icon">ICEGathering<wbr>Timeout<wbr>Workaround<span class="tsd-signature-symbol">:</span> <span class="tsd-signature-symbol"> = 16</span></div>
 					<aside class="tsd-sources">
 						<ul>
-							<li>Defined in <a href="https://github.com/aws/amazon-chime-sdk-js/blob/master/src/meetingsession/MeetingSessionStatusCode.ts#L107">src/meetingsession/MeetingSessionStatusCode.ts:107</a></li>
+							<li>Defined in <a href="https://github.com/aws/amazon-chime-sdk-js/blob/master/src/meetingsession/MeetingSessionStatusCode.ts#L116">src/meetingsession/MeetingSessionStatusCode.ts:116</a></li>
 						</ul>
 					</aside>
 					<div class="tsd-comment tsd-typography">
@@ -282,7 +299,7 @@
 					<div class="tsd-signature tsd-kind-icon">IncompatibleSDP<span class="tsd-signature-symbol">:</span> <span class="tsd-signature-symbol"> = 21</span></div>
 					<aside class="tsd-sources">
 						<ul>
-							<li>Defined in <a href="https://github.com/aws/amazon-chime-sdk-js/blob/master/src/meetingsession/MeetingSessionStatusCode.ts#L132">src/meetingsession/MeetingSessionStatusCode.ts:132</a></li>
+							<li>Defined in <a href="https://github.com/aws/amazon-chime-sdk-js/blob/master/src/meetingsession/MeetingSessionStatusCode.ts#L142">src/meetingsession/MeetingSessionStatusCode.ts:142</a></li>
 						</ul>
 					</aside>
 					<div class="tsd-comment tsd-typography">
@@ -317,7 +334,7 @@
 					</aside>
 					<div class="tsd-comment tsd-typography">
 						<div class="lead">
-							<p>The meeting has ended.</p>
+							<p>The attendee attempted to join a meeting that has already ended.</p>
 						</div>
 					</div>
 				</section>
@@ -327,7 +344,7 @@
 					<div class="tsd-signature tsd-kind-icon">No<wbr>Attendee<wbr>Present<span class="tsd-signature-symbol">:</span> <span class="tsd-signature-symbol"> = 23</span></div>
 					<aside class="tsd-sources">
 						<ul>
-							<li>Defined in <a href="https://github.com/aws/amazon-chime-sdk-js/blob/master/src/meetingsession/MeetingSessionStatusCode.ts#L142">src/meetingsession/MeetingSessionStatusCode.ts:142</a></li>
+							<li>Defined in <a href="https://github.com/aws/amazon-chime-sdk-js/blob/master/src/meetingsession/MeetingSessionStatusCode.ts#L152">src/meetingsession/MeetingSessionStatusCode.ts:152</a></li>
 						</ul>
 					</aside>
 					<div class="tsd-comment tsd-typography">
@@ -357,7 +374,7 @@
 					<div class="tsd-signature tsd-kind-icon">Realtime<wbr>Api<wbr>Failed<span class="tsd-signature-symbol">:</span> <span class="tsd-signature-symbol"> = 18</span></div>
 					<aside class="tsd-sources">
 						<ul>
-							<li>Defined in <a href="https://github.com/aws/amazon-chime-sdk-js/blob/master/src/meetingsession/MeetingSessionStatusCode.ts#L117">src/meetingsession/MeetingSessionStatusCode.ts:117</a></li>
+							<li>Defined in <a href="https://github.com/aws/amazon-chime-sdk-js/blob/master/src/meetingsession/MeetingSessionStatusCode.ts#L126">src/meetingsession/MeetingSessionStatusCode.ts:126</a></li>
 						</ul>
 					</aside>
 					<div class="tsd-comment tsd-typography">
@@ -372,12 +389,17 @@
 					<div class="tsd-signature tsd-kind-icon">Signaling<wbr>Bad<wbr>Request<span class="tsd-signature-symbol">:</span> <span class="tsd-signature-symbol"> = 12</span></div>
 					<aside class="tsd-sources">
 						<ul>
-							<li>Defined in <a href="https://github.com/aws/amazon-chime-sdk-js/blob/master/src/meetingsession/MeetingSessionStatusCode.ts#L84">src/meetingsession/MeetingSessionStatusCode.ts:84</a></li>
+							<li>Defined in <a href="https://github.com/aws/amazon-chime-sdk-js/blob/master/src/meetingsession/MeetingSessionStatusCode.ts#L91">src/meetingsession/MeetingSessionStatusCode.ts:91</a></li>
 						</ul>
 					</aside>
 					<div class="tsd-comment tsd-typography">
 						<div class="lead">
-							<p>Bad request on JOIN or SUBSCRIBE</p>
+							<p>The Chime SDK for JavaScript failed to establish a signaling connection because
+								you or someone else deleted the attendee using the DeleteAttendee API action
+								in your server application. You also should not use the attendee response from
+								the ended meeting that you created with the same ClientRequestToken parameter
+								before.
+							<a href="https://docs.aws.amazon.com/chime/latest/APIReference/API_DeleteAttendee.html">https://docs.aws.amazon.com/chime/latest/APIReference/API_DeleteAttendee.html</a></p>
 						</div>
 					</div>
 				</section>
@@ -387,12 +409,13 @@
 					<div class="tsd-signature tsd-kind-icon">Signaling<wbr>Internal<wbr>Server<wbr>Error<span class="tsd-signature-symbol">:</span> <span class="tsd-signature-symbol"> = 13</span></div>
 					<aside class="tsd-sources">
 						<ul>
-							<li>Defined in <a href="https://github.com/aws/amazon-chime-sdk-js/blob/master/src/meetingsession/MeetingSessionStatusCode.ts#L89">src/meetingsession/MeetingSessionStatusCode.ts:89</a></li>
+							<li>Defined in <a href="https://github.com/aws/amazon-chime-sdk-js/blob/master/src/meetingsession/MeetingSessionStatusCode.ts#L97">src/meetingsession/MeetingSessionStatusCode.ts:97</a></li>
 						</ul>
 					</aside>
 					<div class="tsd-comment tsd-typography">
 						<div class="lead">
-							<p>Internal server error on JOIN or SUBSCRIBE</p>
+							<p>The Chime SDK for JavaScript failed to establish a signaling connection to the Chime
+							backend due to an internal server error.</p>
 						</div>
 					</div>
 				</section>
@@ -402,7 +425,7 @@
 					<div class="tsd-signature tsd-kind-icon">Signaling<wbr>Request<wbr>Failed<span class="tsd-signature-symbol">:</span> <span class="tsd-signature-symbol"> = 14</span></div>
 					<aside class="tsd-sources">
 						<ul>
-							<li>Defined in <a href="https://github.com/aws/amazon-chime-sdk-js/blob/master/src/meetingsession/MeetingSessionStatusCode.ts#L94">src/meetingsession/MeetingSessionStatusCode.ts:94</a></li>
+							<li>Defined in <a href="https://github.com/aws/amazon-chime-sdk-js/blob/master/src/meetingsession/MeetingSessionStatusCode.ts#L102">src/meetingsession/MeetingSessionStatusCode.ts:102</a></li>
 						</ul>
 					</aside>
 					<div class="tsd-comment tsd-typography">
@@ -417,12 +440,13 @@
 					<div class="tsd-signature tsd-kind-icon">State<wbr>Machine<wbr>Transition<wbr>Failed<span class="tsd-signature-symbol">:</span> <span class="tsd-signature-symbol"> = 15</span></div>
 					<aside class="tsd-sources">
 						<ul>
-							<li>Defined in <a href="https://github.com/aws/amazon-chime-sdk-js/blob/master/src/meetingsession/MeetingSessionStatusCode.ts#L99">src/meetingsession/MeetingSessionStatusCode.ts:99</a></li>
+							<li>Defined in <a href="https://github.com/aws/amazon-chime-sdk-js/blob/master/src/meetingsession/MeetingSessionStatusCode.ts#L108">src/meetingsession/MeetingSessionStatusCode.ts:108</a></li>
 						</ul>
 					</aside>
 					<div class="tsd-comment tsd-typography">
 						<div class="lead">
-							<p>Failed to transition between two states for some reason</p>
+							<p>Deprecated. Failed to transition between two states for some reason
+							This will be removed in v3.0.0.</p>
 						</div>
 					</div>
 				</section>
@@ -432,7 +456,7 @@
 					<div class="tsd-signature tsd-kind-icon">TURNCredentials<wbr>Forbidden<span class="tsd-signature-symbol">:</span> <span class="tsd-signature-symbol"> = 22</span></div>
 					<aside class="tsd-sources">
 						<ul>
-							<li>Defined in <a href="https://github.com/aws/amazon-chime-sdk-js/blob/master/src/meetingsession/MeetingSessionStatusCode.ts#L137">src/meetingsession/MeetingSessionStatusCode.ts:137</a></li>
+							<li>Defined in <a href="https://github.com/aws/amazon-chime-sdk-js/blob/master/src/meetingsession/MeetingSessionStatusCode.ts#L147">src/meetingsession/MeetingSessionStatusCode.ts:147</a></li>
 						</ul>
 					</aside>
 					<div class="tsd-comment tsd-typography">
@@ -453,7 +477,7 @@
 					<div class="tsd-comment tsd-typography">
 						<div class="lead">
 							<p>Deprecated. The meeting has ended. This is a legacy alias for MeetingEnded and will
-							be removed in v2.0.0.</p>
+							be removed in v3.0.0.</p>
 						</div>
 					</div>
 				</section>
@@ -463,7 +487,7 @@
 					<div class="tsd-signature tsd-kind-icon">Task<wbr>Failed<span class="tsd-signature-symbol">:</span> <span class="tsd-signature-symbol"> = 19</span></div>
 					<aside class="tsd-sources">
 						<ul>
-							<li>Defined in <a href="https://github.com/aws/amazon-chime-sdk-js/blob/master/src/meetingsession/MeetingSessionStatusCode.ts#L122">src/meetingsession/MeetingSessionStatusCode.ts:122</a></li>
+							<li>Defined in <a href="https://github.com/aws/amazon-chime-sdk-js/blob/master/src/meetingsession/MeetingSessionStatusCode.ts#L131">src/meetingsession/MeetingSessionStatusCode.ts:131</a></li>
 						</ul>
 					</aside>
 					<div class="tsd-comment tsd-typography">
@@ -478,7 +502,7 @@
 					<div class="tsd-signature tsd-kind-icon">Video<wbr>Call<wbr>AtSource<wbr>Capacity<span class="tsd-signature-symbol">:</span> <span class="tsd-signature-symbol"> = 11</span></div>
 					<aside class="tsd-sources">
 						<ul>
-							<li>Defined in <a href="https://github.com/aws/amazon-chime-sdk-js/blob/master/src/meetingsession/MeetingSessionStatusCode.ts#L79">src/meetingsession/MeetingSessionStatusCode.ts:79</a></li>
+							<li>Defined in <a href="https://github.com/aws/amazon-chime-sdk-js/blob/master/src/meetingsession/MeetingSessionStatusCode.ts#L81">src/meetingsession/MeetingSessionStatusCode.ts:81</a></li>
 						</ul>
 					</aside>
 					<div class="tsd-comment tsd-typography">
@@ -524,6 +548,9 @@
 					<li class="current tsd-kind-enum">
 						<a href="meetingsessionstatuscode.html" class="tsd-kind-icon">Meeting<wbr>Session<wbr>Status<wbr>Code</a>
 						<ul>
+							<li class=" tsd-kind-enum-member tsd-parent-kind-enum">
+								<a href="meetingsessionstatuscode.html#audioattendeeremoved" class="tsd-kind-icon">Audio<wbr>Attendee<wbr>Removed</a>
+							</li>
 							<li class=" tsd-kind-enum-member tsd-parent-kind-enum">
 								<a href="meetingsessionstatuscode.html#audioauthenticationrejected" class="tsd-kind-icon">Audio<wbr>Authentication<wbr>Rejected</a>
 							</li>
@@ -622,20 +649,17 @@
 				<li class="tsd-kind-accessor tsd-parent-kind-class"><span class="tsd-kind-icon">Accessor</span></li>
 			</ul>
 			<ul class="tsd-legend">
-				<li class="tsd-kind-property tsd-parent-kind-interface"><span class="tsd-kind-icon">Property</span></li>
-				<li class="tsd-kind-method tsd-parent-kind-interface"><span class="tsd-kind-icon">Method</span></li>
-			</ul>
-			<ul class="tsd-legend">
+				<li class="tsd-kind-constructor tsd-parent-kind-class tsd-is-inherited"><span class="tsd-kind-icon">Inherited constructor</span></li>
 				<li class="tsd-kind-property tsd-parent-kind-class tsd-is-inherited"><span class="tsd-kind-icon">Inherited property</span></li>
 				<li class="tsd-kind-method tsd-parent-kind-class tsd-is-inherited"><span class="tsd-kind-icon">Inherited method</span></li>
 			</ul>
 			<ul class="tsd-legend">
-				<li class="tsd-kind-property tsd-parent-kind-class tsd-is-protected"><span class="tsd-kind-icon">Protected property</span></li>
-				<li class="tsd-kind-method tsd-parent-kind-class tsd-is-protected"><span class="tsd-kind-icon">Protected method</span></li>
+				<li class="tsd-kind-property tsd-parent-kind-interface"><span class="tsd-kind-icon">Property</span></li>
+				<li class="tsd-kind-method tsd-parent-kind-interface"><span class="tsd-kind-icon">Method</span></li>
 			</ul>
 			<ul class="tsd-legend">
-				<li class="tsd-kind-property tsd-parent-kind-class tsd-is-private"><span class="tsd-kind-icon">Private property</span></li>
-				<li class="tsd-kind-method tsd-parent-kind-class tsd-is-private"><span class="tsd-kind-icon">Private method</span></li>
+				<li class="tsd-kind-property tsd-parent-kind-class tsd-is-protected"><span class="tsd-kind-icon">Protected property</span></li>
+				<li class="tsd-kind-method tsd-parent-kind-class tsd-is-protected"><span class="tsd-kind-icon">Protected method</span></li>
 			</ul>
 			<ul class="tsd-legend">
 				<li class="tsd-kind-property tsd-parent-kind-class tsd-is-static"><span class="tsd-kind-icon">Static property</span></li>

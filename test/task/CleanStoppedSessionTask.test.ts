@@ -29,6 +29,7 @@ import DefaultVideoTileFactory from '../../src/videotilefactory/DefaultVideoTile
 import DefaultWebSocketAdapter from '../../src/websocketadapter/DefaultWebSocketAdapter';
 import DOMMockBehavior from '../dommock/DOMMockBehavior';
 import DOMMockBuilder from '../dommock/DOMMockBuilder';
+import { delay } from '../utils';
 
 describe('CleanStoppedSessionTask', () => {
   const expect: Chai.ExpectStatic = chai.expect;
@@ -117,7 +118,7 @@ describe('CleanStoppedSessionTask', () => {
     context.peer = new RTCPeerConnection();
     request = new SignalingClientConnectionRequest('ws://localhost:9999/control', 'test-auth');
     context.signalingClient.openConnection(request);
-    await new Promise(resolve => new TimeoutScheduler(behavior.asyncWaitMs + 10).start(resolve));
+    await delay(behavior.asyncWaitMs + 10);
 
     task = new CleanStoppedSessionTask(context);
   });
@@ -146,13 +147,13 @@ describe('CleanStoppedSessionTask', () => {
 
     it('sets audio and video input to null', done => {
       task.run().then(() => {
-        expect(context.activeAudioInput).to.be.null;
-        expect(context.activeVideoInput).to.be.null;
+        expect(context.activeAudioInput).to.not.be.null;
+        expect(context.activeVideoInput).to.not.be.null;
         done();
       });
     });
 
-    it('releases audio and video device', done => {
+    it('does not release audio and video device', done => {
       let releaseFunctionCalled = false;
       class MockMediaStreamBroker extends NoOpMediaStreamBroker {
         releaseMediaStream(_mediaStream: MediaStream): void {
@@ -161,7 +162,7 @@ describe('CleanStoppedSessionTask', () => {
       }
       context.mediaStreamBroker = new MockMediaStreamBroker();
       task.run().then(() => {
-        expect(releaseFunctionCalled).to.equal(true);
+        expect(releaseFunctionCalled).to.not.be.true;
         done();
       });
     });
@@ -204,40 +205,32 @@ describe('CleanStoppedSessionTask', () => {
       });
     });
 
-    it('clears local audio only', done => {
+    it('clears local audio only', async () => {
       context.activeAudioInput = new MediaStream();
       context.activeVideoInput = null;
-      task.run().then(() => {
-        expect(context.activeAudioInput).to.be.null;
-        expect(context.activeVideoInput).to.be.null;
-        done();
-      });
+      await task.run();
+      expect(context.activeAudioInput).to.not.be.null;
+      expect(context.activeVideoInput).to.be.null;
     });
 
-    it('stops the stats collector the connection monitor', done => {
+    it('stops the stats collector the connection monitor', async () => {
       const statsCollectorSpy = sinon.spy(context.statsCollector, 'stop');
       const connectionMonitorSpy = sinon.spy(context.connectionMonitor, 'stop');
-      task.run().then(() => {
-        expect(statsCollectorSpy.called).to.be.true;
-        expect(connectionMonitorSpy.called).to.be.true;
-        done();
-      });
+      await task.run();
+      expect(statsCollectorSpy.called).to.be.true;
+      expect(connectionMonitorSpy.called).to.be.true;
     });
 
-    it('removes all video tiles', done => {
+    it('removes all video tiles', async () => {
       const removeAllVideoTilesSpy = sinon.spy(context.videoTileController, 'removeAllVideoTiles');
-      task.run().then(() => {
-        expect(removeAllVideoTilesSpy.called).to.be.true;
-        done();
-      });
+      await task.run();
+      expect(removeAllVideoTilesSpy.called).to.be.true;
     });
 
-    it('closes the peer', done => {
+    it('closes the peer', async () => {
       const peerSpy = sinon.spy(context.peer, 'close');
-      task.run().then(() => {
-        expect(peerSpy.called).to.be.true;
-        done();
-      });
+      await task.run();
+      expect(peerSpy.called).to.be.true;
     });
 
     it('can be run when the peer is not available', done => {

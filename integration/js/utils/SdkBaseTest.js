@@ -13,20 +13,31 @@ class SdkBaseTest extends KiteBaseTest {
     super(name, kiteConfig);
     this.baseUrl = this.url;
     if (testName === 'ContentShareOnlyAllowTwoTest') {
-      this.url += '?max-content-share=true';
+      this.url = this.getTransformedURL(this.url, 'max-content-share', 'true');
     }
 
     if (testName === 'MessagingSessionTest') {
       this.userArn = this.payload.userArn;
     }
 
+    if (['Video', 'Audio'].includes(testName)) {
+      this.url = this.getTransformedURL(this.url, 'attendee-presence-timeout-ms', 5000);
+      // Allows us to easily treat unexpected reconnects as failures
+      this.url = this.getTransformedURL(this.url, 'abort-on-reconnect', 'true');
+      this.url = this.getTransformedURL(this.url, 'fatal', '1');
+    }
+
     this.originalURL = this.url;
     this.testReady = false;
     this.testFinish = false;
     this.testName = testName;
-    this.useSimulcast = !!this.payload.useSimulcast ? true : false;
+    this.useSimulcast = !!this.payload.useSimulcast;
     if (this.useSimulcast) {
       this.testName += 'Simulcast';
+    }
+    this.useVideoProcessor = !!this.payload.useVideoProcessor;
+    if (this.useVideoProcessor) {
+      this.testName += 'Processor';
     }
     this.capabilities["name"] = process.env.STAGE !== undefined ? `${this.testName}-${process.env.TEST_TYPE}-${process.env.STAGE}`: `${this.testName}-${process.env.TEST_TYPE}`;
     this.seleniumSessions = [];
@@ -76,7 +87,7 @@ class SdkBaseTest extends KiteBaseTest {
       this.io.on("meeting_created", meetingId => {
         this.meetingCreated = true;
         this.meetingTitle = meetingId;
-        this.url = this.originalURL + '?m=' + this.meetingTitle;
+        this.url = this.getTransformedURL(this.originalURL, 'm', this.meetingTitle);
       });
       this.io.on("finished", () => {
         this.testFinish = true;
@@ -103,11 +114,7 @@ class SdkBaseTest extends KiteBaseTest {
       this.io.emit("setup_test", this.baseUrl, this.attendeeId);
     } else {
       this.meetingTitle = uuidv4();
-      if (this.testName === 'ContentShareOnlyAllowTwoTest') {
-        this.url = this.originalURL + '&m=' + this.meetingTitle;
-      } else {
-        this.url = this.originalURL + '?m=' + this.meetingTitle;
-      }
+      this.url = this.getTransformedURL(this.originalURL, 'm', this.meetingTitle);
     }
   }
 
@@ -174,7 +181,7 @@ class SdkBaseTest extends KiteBaseTest {
 
   writeCompletionTimeTo(filePath) {
     try {
-      const epochTimeInSeconds = Math.round(new Date().getTime() / 1000);
+      const epochTimeInSeconds = Math.round(Date.now() / 1000);
       fs.appendFileSync(`${filePath}/last_run_timestamp`, `${epochTimeInSeconds}\n`, {flag: 'a+'});
       console.log(`Wrote canary completion timestamp : ${epochTimeInSeconds}`);
     } catch (e) {
@@ -293,9 +300,16 @@ class SdkBaseTest extends KiteBaseTest {
       return 'meetingReadinessChecker';
     } else if (this.testName && this.testName.toLowerCase().includes('messagingsession')) {
       return 'messagingSession';
+    } else if (this.testName && this.testName.toLowerCase().includes('testapp')) {
+      return 'testApp';
     } else {
         return 'meeting'
     };
+  }
+
+  getTransformedURL = (url, key, value) => {
+    const sep = url.includes('?') ? '&' : '?';
+    return `${url}${sep}${encodeURIComponent(key)}=${encodeURIComponent(value)}`;
   }
 }
 
